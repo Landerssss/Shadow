@@ -1,0 +1,363 @@
+﻿// 鈹€鈹€鈹€ VORTEX SYSTEM (Genre 1: Shadow Vortex) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+let _vortexId = 0;
+
+class VortexProjectile {
+  constructor(x, y, angle, state) {
+    this.id    = _vortexId++;
+    this.x     = x;
+    this.y     = y;
+    this.angle = angle;
+    this.speed = CONFIG.VORTEX.PROJECTILE_SPEED;
+    this.vx    = Math.cos(angle) * this.speed;
+    this.vy    = Math.sin(angle) * this.speed;
+    this.radius = CONFIG.VORTEX.PROJECTILE_RADIUS;
+    this.alive  = true;
+    this.life   = 3.0;
+  }
+
+  update(dt, enemies, state) {
+    if (!this.alive) return;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.life -= dt;
+    if (this.life <= 0) { this.alive = false; return; }
+
+    // Check hit
+    const r = this.radius + 30; // 浼扮畻锛氫笌鏁屼汉鍗婂緞涔嬪拰锛堥伩鍏嶆瘡涓晫浜?e.radius 绱姞锛?    const rSq = (r + 14) * (r + 14);
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const dx = e.x - this.x, dy = e.y - this.y;
+      if (dx * dx + dy * dy < rSq) {
+        // Spawn vortex at impact point
+        VortexManager.spawnVortex(this.x, this.y, state);
+        Particles.spawn(this.x, this.y, '#dd00ff', 10, 100, 0.6);
+        this.alive = false;
+        return;
+      }
+    }
+  }
+}
+
+class Vortex {
+  constructor(x, y, state) {
+    this.id          = _vortexId++;
+    this.x           = x;
+    this.y           = y;
+    this.alive       = true;
+    this.active      = true; // shadow entity
+    this._riftWith   = new Set(); // track which other vortex IDs we've already spawned a rift with
+    this._fused      = false;     // LV7: 宸插弬涓庤瀺鍚堬紝涓嶅彲鍐嶅悎鎴?    const cfg = CONFIG.VORTEX;
+    const genreLv = state.genreLv;
+
+    let radiusBonus = genreLv >= 2 ? cfg.LV2_RADIUS_BONUS : 0;
+    this.radius      = cfg.VORTEX_RADIUS * (1 + radiusBonus);
+    this.maxDuration = cfg.VORTEX_DURATION;
+    this.timer       = cfg.VORTEX_DURATION;
+    this.pullForce   = cfg.VORTEX_PULL_FORCE;
+    this.tickDamage  = cfg.VORTEX_TICK_DAMAGE * (genreLv >= 3 ? (1 + cfg.LV3_DMG_BONUS) : 1);
+    this.tickRate    = cfg.VORTEX_TICK_RATE;
+    this.tickTimer   = 0;
+    this.lightningTimer = 0.5; // LV5: 鑷骇闂數鑺傚
+  }
+
+  update(dt, enemies, state) {
+    if (!this.alive) return;
+    this.timer -= dt;
+    if (this.timer <= 0) { this.alive = false; this.active = false; return; }
+
+    // Pull enemies & deal tick damage
+    this.tickTimer -= dt;
+    const doTick = this.tickTimer <= 0;
+    if (doTick) this.tickTimer = this.tickRate;
+
+    const rSq = this.radius * this.radius;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const dx = e.x - this.x, dy = e.y - this.y;
+      const dSq = dx * dx + dy * dy;
+      if (dSq < rSq) {
+        // Pull toward center
+        const angle = Math.atan2(-dy, -dx);
+        e.x += Math.cos(angle) * this.pullForce * dt;
+        e.y += Math.sin(angle) * this.pullForce * dt;
+
+        // Tick damage
+        if (doTick) {
+          e.takeDamage(this.tickDamage, state);
+          const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
+          Utils.spawnDmgNum(sv.x, sv.y, this.tickDamage);
+        }
+      }
+    }
+
+    // LV5: 婕╂丁鎸佺画浜х敓闂數锛?.8s 娑堝け锛屾柟鍚戦殢鏈猴級
+    if (state.genreLv >= 5) {
+      this.lightningTimer -= dt;
+      if (this.lightningTimer <= 0) {
+        this.lightningTimer = 0.5;
+        const angle = Math.random() * Math.PI * 2;
+        VortexManager.spawnLightning(this.x, this.y, angle, state);
+      }
+    }
+
+    // LV6: 婕╂丁鐩镐氦鏃剁敓鎴愭殫褰辫闅欙紙鍚戞€墿鏈€澶氱殑鏂瑰悜鍙?3 閬撴縺鍏夛紝浼ゅ 60%锛?    if (state.genreLv >= 6) {
+      for (const other of VortexManager.vortices) {
+        if (other === this || !other.alive) continue;
+        if (this._fused || other._fused) continue;
+        const sumR = this.radius + other.radius;
+        const dx = other.x - this.x, dy = other.y - this.y;
+        if (dx * dx + dy * dy < sumR * sumR && !this._riftWith.has(other.id)) {
+          this._riftWith.add(other.id);
+          other._riftWith && other._riftWith.add(this.id);
+          const mx = (this.x + other.x) / 2;
+          const my = (this.y + other.y) / 2;
+          VortexManager.spawnRift(mx, my, state);
+
+          // LV7: 涓や釜婕╂丁铻嶅悎鎴?1.5 鍊嶅ぇ鐨勬缉娑★紙涓嶅彲鍐嶅悎鎴愶級
+          if (state.genreLv >= 7) {
+            const fusedR = CONFIG.VORTEX.VORTEX_RADIUS * CONFIG.VORTEX.LV8_FUSE_RADIUS_MULT;
+            VortexManager.spawnVortex(mx, my, state, undefined, fusedR);
+            const fv = VortexManager.vortices[VortexManager.vortices.length - 1];
+            if (fv) fv._fused = true;
+            this.alive = false; this.active = false;
+            other.alive = false; other.active = false;
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
+class RiftLaser {
+  constructor(x, y, state) {
+    this.id    = _vortexId++;
+    this.x     = x;
+    this.y     = y;
+    this.timer  = 0;
+    this.alive  = true;
+    this.state  = state;
+    this._damaged = new Set(); // 姣忎釜鏁屼汉鍙彈涓€娆′激瀹?    // 涓ら亾闂數锛?s 鍜?0.5s锛涙瘡娆￠噸鏂伴€夋嫨鏂瑰悜骞剁敓鎴愭柊鐨勯敮榻垮舰鐘?    this._phases = [
+      { delay: 0.0, fired: false, angle: null, segments: null },
+      { delay: 0.5, fired: false, angle: null, segments: null },
+    ];
+    this._phaseLife = 0.5;
+    this._totalLife = 1.0;
+  }
+
+  update(dt, enemies) {
+    if (!this.alive) return;
+    this.timer += dt;
+
+    for (const phase of this._phases) {
+      if (!phase.fired && this.timer >= phase.delay) {
+        phase.fired = true;
+        const angle = this._directionWithMostEnemies(enemies);
+        if (angle !== null) {
+          phase.angle = angle;
+          phase.segments = this._makeSegments(angle);
+          this._damageInCone(angle, enemies);
+        }
+      }
+    }
+
+    if (this.timer >= this._totalLife) {
+      this.alive = false;
+    }
+  }
+
+  // 鎵炬晫浜烘渶澶氱殑鎵囧尯鏂瑰悜锛堟帓闄ゅ凡鍙椾激鐨勶級
+  _directionWithMostEnemies(enemies) {
+    const sectors = 8;
+    const counts = new Array(sectors).fill(0);
+    const range  = CONFIG.VORTEX.RIFT_LASER_RANGE;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (this._damaged.has(e.id)) continue;
+      const d = Utils.dist(this, e);
+      if (d > range) continue;
+      const a = Utils.angle(this, e);
+      const sector = Math.floor(((a + Math.PI) / (Math.PI * 2)) * sectors) % sectors;
+      counts[sector]++;
+    }
+    let bestIdx = -1, bestC = -1;
+    for (let i = 0; i < sectors; i++) {
+      if (counts[i] > bestC) { bestC = counts[i]; bestIdx = i; }
+    }
+    if (bestIdx < 0 || bestC === 0) return null;
+    return ((bestIdx / sectors) * Math.PI * 2) - Math.PI;
+  }
+
+  // 鐢熸垚閿娇鎶樼嚎锛堜笘鐣屽潗鏍囩浉瀵瑰師鐐癸級
+  _makeSegments(angle) {
+    const segs = [];
+    const range = CONFIG.VORTEX.RIFT_LASER_RANGE;
+    const steps = 7;
+    const amp = 14;
+    segs.push({ x: 0, y: 0 });
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const dx = Math.cos(angle) * range * t + Utils.rand(-amp, amp);
+      const dy = Math.sin(angle) * range * t + Utils.rand(-amp, amp);
+      segs.push({ x: dx, y: dy });
+    }
+    return segs;
+  }
+
+  _damageInCone(angle, enemies) {
+    const cfg = CONFIG.VORTEX;
+    // LV6: 婵€鍏変激瀹充笅璋冧负鍘熸潵鐨?60%
+    const mult = (this.state.genreLv >= 6) ? 0.6 : 1;
+    const dmg = cfg.RIFT_LASER_DAMAGE * mult;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      if (this._damaged.has(e.id)) continue;
+      const d = Utils.dist(this, e);
+      if (d > cfg.RIFT_LASER_RANGE) continue;
+      const eAngle = Utils.angle(this, e);
+      const diff = Math.abs(((eAngle - angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      if (diff < 0.25) { // within ~14 degrees
+        e.takeDamage(dmg, this.state);
+        const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
+        Utils.spawnDmgNum(sv.x, sv.y, dmg, 'crit');
+        Particles.spawn(e.x, e.y, '#ff00ff', 8, 80, 0.4);
+        this._damaged.add(e.id);
+      }
+    }
+  }
+}
+
+// 鈹€鈹€鈹€ VORTEX MANAGER 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+const VortexManager = {
+  projectiles: [],
+  vortices:    [],
+  rifts:       [],
+  lightnings:  [], // LV5 鑷骇闂數
+  fireTimer:   0,
+
+  init() {
+    this.projectiles = [];
+    this.vortices    = [];
+    this.rifts       = [];
+    this.lightnings  = [];
+    this.fireTimer   = 0;
+  },
+
+  update(dt, player, enemies, state) {
+    const genreLv = state.genreLv;
+
+    // Auto-fire projectiles toward nearest enemy
+    this.fireTimer -= dt;
+    if (this.fireTimer <= 0) {
+      this.fireTimer = CONFIG.VORTEX.PROJECTILE_INTERVAL;
+      const nearest = this._nearestEnemy(player, enemies);
+      if (nearest) {
+        const angle = Utils.angle(player, nearest);
+        const count = genreLv >= 4 ? 2 : 1;
+        for (let i = 0; i < count; i++) {
+          const spread = count > 1 ? (i === 0 ? -0.15 : 0.15) : 0;
+          this.projectiles.push(new VortexProjectile(player.x, player.y, angle + spread, state));
+        }
+      }
+    }
+
+    // Update projectiles
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      this.projectiles[i].update(dt, enemies, state);
+      if (!this.projectiles[i].alive) this.projectiles.splice(i, 1);
+    }
+
+    // Update vortices (浼?push lightning)
+    for (let i = this.vortices.length - 1; i >= 0; i--) {
+      this.vortices[i].update(dt, enemies, state);
+      if (!this.vortices[i].alive) this.vortices.splice(i, 1);
+    }
+
+    // Update rifts
+    for (let i = this.rifts.length - 1; i >= 0; i--) {
+      this.rifts[i].update(dt, enemies);
+      if (!this.rifts[i].alive) this.rifts.splice(i, 1);
+    }
+
+    // Update lightnings (LV5 鑷骇锛?.8s 娑堝け)
+    for (let i = this.lightnings.length - 1; i >= 0; i--) {
+      const l = this.lightnings[i];
+      l.life -= dt;
+      // 绔嬪嵆浼ゅ涓€娆★紙cone 鍒ゅ畾锛?      for (const e of enemies) {
+        if (!e.alive || l._damaged.has(e.id)) continue;
+        const dx = e.x - l.x, dy = e.y - l.y;
+        const range = CONFIG.VORTEX.RIFT_LASER_RANGE * 0.6;
+        if (dx * dx + dy * dy > range * range) continue;
+        const eAngle = Math.atan2(dy, dx);
+        const diff = Math.abs(((eAngle - l.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        if (diff < 0.25) {
+          e.takeDamage(CONFIG.VORTEX.RIFT_LASER_DAMAGE, l.state);
+          l._damaged.add(e.id);
+        }
+      }
+      if (l.life <= 0) this.lightnings.splice(i, 1);
+    }
+  },
+
+  spawnVortex(x, y, state, duration, radius) {
+    const v = new Vortex(x, y, state);
+    if (duration != null) {
+      v.maxDuration = duration;
+      v.timer = duration;
+    }
+    if (radius != null) {
+      v.radius = radius;
+    }
+    this.vortices.push(v);
+  },
+
+  spawnRift(x, y, state) {
+    const rift = new RiftLaser(x, y, state);
+    rift.state = state;
+    this.rifts.push(rift);
+    Particles.spawn(x, y, '#ff00ff', 15, 120, 0.7);
+  },
+
+  // LV5: 婕╂丁鑷骇闂數锛?.8s 娑堝け锛屾柟鍚戦殢鏈猴級
+  spawnLightning(x, y, angle, state) {
+    const range = CONFIG.VORTEX.RIFT_LASER_RANGE * 0.6;
+    const steps = 7;
+    const amp = 14;
+    const segs = [{ x: 0, y: 0 }];
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      segs.push({
+        x: Math.cos(angle) * range * t + Utils.rand(-amp, amp),
+        y: Math.sin(angle) * range * t + Utils.rand(-amp, amp),
+      });
+    }
+    this.lightnings.push({
+      x, y, angle, segments: segs,
+      life: 0.8, maxLife: 0.8,
+      state,
+      _damaged: new Set(),
+    });
+  },
+
+  getActiveVortices() {
+    return this.vortices.filter(v => v.alive);
+  },
+
+  _nearestEnemy(player, enemies) {
+    let best = null, bestD = Infinity;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const d = Utils.dist(player, e);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best;
+  },
+
+  clear() {
+    this.projectiles = [];
+    this.vortices    = [];
+    this.rifts       = [];
+    this.lightnings  = [];
+    this.fireTimer   = 0;
+  }
+};

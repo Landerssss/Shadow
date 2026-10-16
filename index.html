@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>暗影回响 Shadow Echo — 肉鸽割草</title>
+  <meta name="description" content="暗影回响 - 2D肉鸽割草游戏，选择流派，击败怪物，升级解锁强力技能">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ── SCREENS ── -->
+  <div id="screen-start" class="screen active">
+    <div class="start-bg"></div>
+    <div class="start-content">
+      <h1 class="game-title">暗影回响</h1>
+      <p class="game-subtitle">SHADOW ECHO</p>
+      <p class="game-desc">在无尽的黑暗中，你只需要向前开枪。</p>
+      <button id="btn-start" class="btn-primary" onclick="Game.showGenreSelect()">开始游戏</button>
+    </div>
+    <canvas id="bg-canvas"></canvas>
+  </div>
+
+  <!-- Genre Select -->
+  <div id="screen-genre" class="screen">
+    <div class="genre-bg"></div>
+    <h2 class="genre-title">选择你的流派</h2>
+    <p class="genre-hint">你的选择将影响整场战斗的风格</p>
+    <div class="genre-cards">
+      <div class="genre-card" id="card-genre-0" onclick="Game.selectGenre(0)">
+        <div class="genre-card-glow g0"></div>
+        <div class="genre-icon">👤</div>
+        <h3>回到过去</h3>
+        <p class="genre-name-en">Shadow Echo</p>
+        <ul>
+          <li>在原地生成暗影分身</li>
+        </ul>
+        <div class="genre-badge">召唤流</div>
+      </div>
+      <div class="genre-card" id="card-genre-1" onclick="Game.selectGenre(1)">
+        <div class="genre-card-glow g1"></div>
+        <div class="genre-icon">🌀</div>
+        <h3>停止的暗影</h3>
+        <p class="genre-name-en">Shadow Vortex</p>
+        <ul>
+          <li>掌握暗影漩涡</li>
+        </ul>
+        <div class="genre-badge">控场流</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Level Up Card Select -->
+  <div id="screen-levelup" class="screen">
+    <div class="levelup-bg"></div>
+    <h2 class="levelup-title">✦ 等级提升 ✦</h2>
+    <p class="levelup-sub">选择一张强化卡</p>
+    <div id="levelup-cards" class="levelup-cards"></div>
+  </div>
+
+  <!-- Game Over -->
+  <div id="screen-gameover" class="screen">
+    <div class="gameover-bg"></div>
+    <div class="gameover-content">
+      <h2 class="gameover-title">你已沉入暗影</h2>
+      <div id="gameover-stats" class="gameover-stats"></div>
+      <div class="btn-row">
+        <button class="btn-primary" onclick="Game.restart()">重新开始</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Game Win -->
+  <div id="screen-win" class="screen">
+    <div class="gameover-bg"></div>
+    <div class="gameover-content win">
+      <h2 class="win-title">暗影已被斩断</h2>
+      <div id="win-stats" class="gameover-stats"></div>
+      <div class="btn-row">
+        <button class="btn-primary" onclick="Game.restart()">再来一局</button>
+        <button class="btn-primary btn-endless" onclick="Game.startEndless()">无尽模式</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud" class="hud hidden">
+    <!-- BOSS 倒计时（屏幕最上方，90s 倒数，到 0 后自动隐藏，由 canvas 共享血条接管） -->
+    <div id="hud-boss-timer" class="hud-boss-timer">BOSS还有 90 秒出现</div>
+    <!-- BOSS 警告（屏幕顶部，共享血条下方，仅 BOSS 触发时显示） -->
+    <div id="hud-boss-warning" class="hud-boss-warning hidden">⚠ BOSS 伤害极高注意躲避！</div>
+
+    <div class="hud-left">
+      <div class="hud-level">Lv.<span id="hud-level-num">1</span></div>
+      <div class="exp-bar-wrap">
+        <div id="exp-bar" class="exp-bar"></div>
+        <span id="exp-text" class="exp-text">0 / 100</span>
+      </div>
+    </div>
+    <div class="hud-right">
+      <div class="hud-info">
+        <span class="hud-genre-name" id="hud-genre-name">Shadow Echo</span>
+        <span class="hud-genre-lv">Lv.<span id="hud-genre-lv">1</span></span>
+      </div>
+      <div class="hud-time" id="hud-time">00:00</div>
+    </div>
+  </div>
+
+  <!-- Main Canvas -->
+  <canvas id="game-canvas"></canvas>
+
+  <script src="js/utils.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/particles.js"></script>
+  <script src="js/bullet.js"></script>
+  <script src="js/shadow.js"></script>
+  <script src="js/vortex.js"></script>
+  <script src="js/shadowlink.js"></script>
+  <script src="js/enemy.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/genre.js"></script>
+  <script src="js/buff.js"></script>
+  <script src="js/cards.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
