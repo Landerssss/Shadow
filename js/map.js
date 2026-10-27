@@ -31,17 +31,20 @@ const MapDecor = {
   },
 
   draw(ctx, cam) {
+    const ox = cam.sw / 2 - cam.x;
+    const oy = cam.sh / 2 - cam.y;
     for (const p of this.bgParticles) {
-      if (!Utils.isOnScreen(p.x, p.y, cam, 20)) continue;
-      const s = Utils.worldToScreen(p.x, p.y, cam);
-      ctx.save();
+      const sx = p.x + ox;
+      const sy = p.y + oy;
+      if (sx < -20 || sx > cam.sw + 20 || sy < -20 || sy > cam.sh + 20) continue;
+      // 发光用光晕贴图替代 shadowBlur
+      Renderer._drawGlow(sx, sy, p.r * 3, p.color, p.alpha * 0.8);
       ctx.globalAlpha = p.alpha;
       ctx.fillStyle = p.color;
-      ctx.shadowBlur = 6; ctx.shadowColor = p.color;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, p.r, 0, Math.PI * 2);
+      ctx.arc(sx, sy, p.r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.restore();
     }
+    ctx.globalAlpha = 1;
   }
 };

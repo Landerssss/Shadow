@@ -98,6 +98,9 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
 .genre-card:hover .genre-card-glow { opacity: 1; }
 .g0 { background: radial-gradient(ellipse at 50% 0%, #7b2fff33, transparent 70%); }
 .g1 { background: radial-gradient(ellipse at 50% 0%, #ff3cac33, transparent 70%); }
+.g2 { background: radial-gradient(ellipse at 50% 0%, #35f0ff33, transparent 70%); }
+.g3 { background: radial-gradient(ellipse at 50% 0%, #e0442633, transparent 70%); }
+.g4 { background: radial-gradient(ellipse at 50% 0%, #b26bff33, transparent 70%); }
 .genre-icon { font-size: 2.4rem; margin-bottom: 4px; }
 .genre-card h3 { font-size: 1.3rem; font-weight: 700; color: #fff; }
 .genre-name-en { font-size: .8rem; color: var(--textDim); letter-spacing: .2em; margin-top: -6px; }
@@ -296,6 +299,29 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
   0%, 100% { opacity: 0.85; }
   50%      { opacity: 1; text-shadow: 0 0 14px #ff2030, 0 0 24px #ff2030; }
 }
+
+/* 暗影轨道场一次性教学提示（弹射流首次进入，屏幕中下方短暂显示） */
+.hud-orbit-hint {
+  position: fixed;
+  bottom: 96px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  max-width: 640px;
+  text-align: center;
+  font-size: 0.95rem; font-weight: 600;
+  color: #d9b8ff;
+  background: rgba(22, 11, 56, 0.72);
+  border: 1px solid rgba(157, 104, 255, 0.45);
+  border-radius: 10px;
+  padding: 10px 18px;
+  letter-spacing: 0.5px;
+  text-shadow: 0 0 10px rgba(110, 54, 201, 0.8);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity .6s ease;
+}
+.hud-orbit-hint.hidden { display: none; }
+.hud-orbit-hint.fade { opacity: 0; }
 .exp-bar-wrap {
   position: relative; height: 16px; background: #1a0040; border-radius: 10px;
   width: 260px; overflow: hidden;
@@ -338,7 +364,9 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
 .dmg-num {
   position: fixed; pointer-events: none; font-size: .85rem; font-weight: 700;
   color: #fff; text-shadow: 0 0 6px #000; z-index: 6;
-  animation: floatUp .7s ease-out forwards;
+  /* 上浮动画由 js/utils.js 通过 WAAPI 驱动（关键帧同 @keyframes floatUp），
+     复用 DOM 节点 + 合成器动画，避免频繁创建/销毁节点引发卡顿 */
+  opacity: 0;
 }
 .dmg-num.crit { color: #ffcc00; font-size: 1.1rem; }
 .dmg-num.heal { color: #00ffaa; }

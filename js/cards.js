@@ -13,7 +13,7 @@ const Cards = {
     const picked = state.pickedOneTimeBuffs;
     const playerLv = state.player ? state.player.level : 1;
     const mechPool = BUFFS.filter(b =>
-      b.type !== 'genre' && b.oneTime && !picked.has(b.id) &&
+      b.type !== 'genre' && b.oneTime && !b.hidden && !picked.has(b.id) &&
       (!b.unlockLevel || playerLv >= b.unlockLevel)
     );
     if (mechPool.length === 0) return null;
@@ -24,7 +24,7 @@ const Cards = {
   _pickCommonCard(state) {
     const playerLv = state.player ? state.player.level : 1;
     const commonPool = BUFFS.filter(b =>
-      b.type !== 'genre' && !b.oneTime &&
+      b.type !== 'genre' && !b.oneTime && !b.hidden &&
       (!b.unlockLevel || playerLv >= b.unlockLevel)
     );
     if (commonPool.length === 0) return null;
@@ -34,20 +34,20 @@ const Cards = {
   // Generate cards for level-up selection
   // 出现规则：
   //   主角 < 10 级：3 张；>= 10 级：4 张
-  //   第 1 张：流派卡（未选完时强制）；第 2 张：机制卡（从 oneTime 池随机）
+  //   流派卡（未选完时）与机制卡（从 oneTime 池随机）必定出现，但展示顺序随机
   //   剩余：从通用池随机（不重复）
   generate(state) {
     const pool = [];
     const usedIds = new Set();
 
-    // 第 1 张：流派卡
+    // 流派卡：未选完时必定出现
     const genreCard = Cards._getPendingGenreCard(state);
     if (genreCard) {
       pool.push(genreCard);
       usedIds.add(genreCard.id);
     }
 
-    // 第 2 张：机制卡
+    // 机制卡：必定出现（从 oneTime 池随机）
     const mechCard = Cards._pickMechanismCard(state);
     if (mechCard) {
       pool.push(mechCard);
@@ -60,7 +60,7 @@ const Cards = {
 
     // 补足通用卡
     const commonPool = BUFFS.filter(b =>
-      b.type !== 'genre' && !b.oneTime && !usedIds.has(b.id) &&
+      b.type !== 'genre' && !b.oneTime && !b.hidden && !usedIds.has(b.id) &&
       (!b.unlockLevel || playerLv >= b.unlockLevel)
     );
     const shuffled = Utils.shuffle(commonPool);
@@ -69,7 +69,8 @@ const Cards = {
       usedIds.add(shuffled[i].id);
     }
 
-    return pool;
+    // 必定出现的卡仍在池中，但整体顺序随机
+    return Utils.shuffle(pool);
   },
 
   // 卡片 UI 分类：流派 / 机制 / 通用

@@ -1,0 +1,8 @@
+# 工具运行时目录（不上传）
+.dodwork/
+.dodwork-runtime/
+.opencode/
+
+# 系统杂项
+Thumbs.db
+.DS_Store

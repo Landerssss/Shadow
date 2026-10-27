@@ -1,0 +1,1628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>暗影大人 · 像素肉鸽 Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #4a4a52; overflow: hidden; font-family: "Consolas", "Courier New", monospace; user-select: none; }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+  #hud {
+    position: fixed; top: 8px; left: 10px; color: #fff; font-size: 12px;
+    text-shadow: 0 0 4px #000, 0 0 2px #000; pointer-events: none; z-index: 5; line-height: 1.5;
+  }
+  #hud b { color: #ff5577; }
+  #hud .ok { color: #8cffc6; }
+  #ctrl {
+    position: fixed; bottom: 8px; right: 10px; color: #fff; font-size: 11px;
+    text-shadow: 0 0 4px #000; pointer-events: none; z-index: 5;
+  }
+  #loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #222; font-size: 18px; z-index: 10; background: #4a4a52;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"></div>
+<div id="ctrl">WASD 移动 · 1/2/3 选卡 · R 重开</div>
+<div id="loading">资源加载中…</div>
+<script>
+'use strict';
+
+// ============================================================
+// 游戏阶段
+//   'archetype' -> 开场选择流派
+//   'playing'   -> 战斗中
+//   'levelup'   -> 升级选卡
+//   'gameover'  -> 死亡
+// ============================================================
+
+// ============================================================
+// 资源：sprites/hero.png、shadow.png、monster.png
+// ============================================================
+const SPRITE = {
+  hero:    new Image(),
+  shadow:  new Image(),
+  monster: new Image(),
+  ready: { hero: false, shadow: false, monster: false },
+  allReady: false,
+};
+function checkAllReady() {
+  SPRITE.allReady = SPRITE.ready.hero && SPRITE.ready.shadow && SPRITE.ready.monster;
+  if (SPRITE.allReady) document.getElementById('loading').style.display = 'none';
+}
+SPRITE.hero.onload    = () => { SPRITE.ready.hero = true;    checkAllReady(); };
+SPRITE.hero.onerror   = () => { document.getElementById('loading').textContent = '资源加载失败：sprites/hero.png'; };
+SPRITE.shadow.onload  = () => { SPRITE.ready.shadow = true;  checkAllReady(); };
+SPRITE.shadow.onerror = () => { document.getElementById('loading').textContent = '资源加载失败：sprites/shadow.png'; };
+SPRITE.monster.onload  = () => { SPRITE.ready.monster = true; checkAllReady(); };
+SPRITE.monster.onerror = () => { document.getElementById('loading').textContent = '资源加载失败：sprites/monster.png'; };
+SPRITE.hero.src    = 'sprites/hero.png';
+SPRITE.shadow.src  = 'sprites/shadow.png';
+SPRITE.monster.src = 'sprites/monster.png';
+
+// 在游戏中显示的逻辑尺寸（碰撞半径）
+const SPRITE_SCALE = {
+  hero:    1.8,   // 主角显示尺寸倍数
+  shadow:  1.6,
+  monster: 1.6,
+};
+const SPRITE_RADIUS = {
+  hero:    14,
+  shadow:  13,
+  monster: 13,
+};
+
+// ============================================================
+// 配置
+// ============================================================
+const CFG = {
+  // 世界
+  WORLD: 4200,
+
+  // 玩家
+  PLAYER_MAX_HP:   120,
+  PLAYER_DAMAGE:   12,
+  PLAYER_ATK_INT:  0.42,
+  PLAYER_SPEED:    230,
+  PLAYER_RADIUS:   22,
+  PLAYER_INVULN:   0.6,
+
+  // 子弹
+  BULLET_SPEED: 640,
+  BULLET_LIFE:  1.4,
+  BULLET_R:     5,
+
+  // 敌人
+  ENEMY_SPEED: 95,
+  ENEMY_R:     22,
+  ENEMY_HP:    20,
+  ENEMY_DMG:   8,
+  ENEMY_EXP:   1,
+  ENEMY_MIN_SPACING: 30, // 敌人之间最小间距，避免完全重叠
+
+  // 生成
+  WAVE_INTERVAL:    30,
+  WAVE_BASE:        8,
+  WAVE_INC:         3,
+  WAVE_MIN_COUNT:   5,
+  SPAWN_DIST_MIN:   420,
+  SPAWN_DIST_MAX:   760,
+
+  // 难度
+  DIFFICULTY_INTERVAL: 60,
+  DIFFICULTY_HP_MULT:  1.55,
+  DIFFICULTY_DMG_MULT: 1.25,
+
+  // 升级
+  BASE_EXP:    5,
+  EXP_GROWTH:  1.35,
+
+  // 流派一：Echo
+  ECHO_LIFE:           25,
+  ECHO_PATROL_R:       120,
+  ECHO_ATTACK_R:       280,
+  ECHO_DMG_MULT:       0.65,
+  ECHO_INTERVAL_BASE:  20,
+  ECHO_INTERVAL_LV2:   18,
+  ECHO_INTERVAL_LV3:   12,
+  ECHO_DMG_LV4_BONUS:  0.40,
+  ECHO_FIRST_DELAY:    3,    // 选完流派后多久生成第一个分身（避免空 20 秒）
+
+  // 流派二：Vortex
+  VORTEX_INTERVAL:     2.0,
+  VORTEX_LIFE:         4.0,
+  VORTEX_R:            72,
+  VORTEX_DPS:          14,
+  VORTEX_PULL:         75,
+  VORTEX_PROJ_SPEED:   500,
+  VORTEX_PROJ_LIFE:    3.0,
+
+  // 通用 BUFF
+  DEATH_SHADOW_LIFE:   4,
+  DEATH_SHADOW_R:      9,
+  SHADOW_LINK_DMG:     7,
+  SHADOW_LINK_CD:      3,
+};
+
+// ============================================================
+// 工具
+// ============================================================
+const TAU = Math.PI * 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const randi = (a, b) => Math.floor(rand(a, b));
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy; };
+const dist = (ax, ay, bx, by) => Math.sqrt(dist2(ax, ay, bx, by));
+const norm = (x, y) => { const m = Math.hypot(x, y) || 1; return { x: x/m, y: y/m }; };
+
+// ============================================================
+// 输入
+// ============================================================
+const keys = {};
+const keyOnce = {};
+const debugKeys = []; // 最近 8 次按键事件
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (!keys[k]) keyOnce[k] = true;
+  keys[k] = true;
+  debugKeys.push(`${e.key}/${e.code}|${k}`);
+  if (debugKeys.length > 8) debugKeys.shift();
+  if (['w','a','s','d','1','2','3',' ','arrowup','arrowdown','arrowleft','arrowright'].includes(k)) e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// ============================================================
+// Canvas
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+// ============================================================
+// 全局状态
+// ============================================================
+const state = {
+  phase: 'archetype',  // 'archetype' | 'playing' | 'levelup' | 'gameover'
+  archetypeChoice: null, // 'echo' | 'vortex'
+  time:        0,
+  difficulty:  1,
+  difficultyT: 0,
+  waveT:       0,
+  waveIdx:     0,
+  enemies:     [],
+  bullets:     [],
+  shadows:     [],
+  vortices:    [],
+  deathShadows:[],
+  links:       [],
+  projectiles: [],
+  rifts:       [],
+  particles:   [],
+  floatingText:[],
+  enemiesKilled: 0,
+  camera: { x: 0, y: 0, shake: 0 },
+  archetypeEcho:   { active: false, level: 0, spawnT: 0, nextInterval: CFG.ECHO_INTERVAL_BASE, firstDelay: 0 },
+  archetypeVortex: { active: false, level: 0, fireT: 0 },
+  riftCooldown: 0,
+};
+
+const player = {
+  x: 0, y: 0,
+  facing: { x: 0, y: -1 },
+  hp: CFG.PLAYER_MAX_HP,
+  maxHp: CFG.PLAYER_MAX_HP,
+  damage: CFG.PLAYER_DAMAGE,
+  atkInt: CFG.PLAYER_ATK_INT,
+  atkCD: 0,
+  speed: CFG.PLAYER_SPEED,
+  level: 1,
+  exp: 0,
+  expNext: CFG.BASE_EXP,
+  invuln: 0,
+  flash: 0,
+  buffs: { deathShadow: 0, link: 0, maxHp: 0, damage: 0, attackSpeed: 0 },
+};
+
+function getPlayerDamage() {
+  let d = player.damage;
+  if (player.buffs.damage > 0) d *= (1 + player.buffs.damage * 0.05);
+  return d;
+}
+function getPlayerAttackInterval() {
+  let iv = player.atkInt;
+  if (player.buffs.attackSpeed > 0) iv /= (1 + player.buffs.attackSpeed * 0.10);
+  if (state.archetypeEcho.level >= 5 && state.archetypeEcho.active) {
+    iv /= (1 + state.shadows.length * 0.15);
+  }
+  return iv;
+}
+function getPlayerMaxHp() {
+  return CFG.PLAYER_MAX_HP * (1 + player.buffs.maxHp * 0.05);
+}
+
+// ============================================================
+// 实体工厂
+// ============================================================
+function makeEnemy(x, y) {
+  const hpMult = Math.pow(CFG.DIFFICULTY_HP_MULT, state.difficulty - 1);
+  const dmgMult = Math.pow(CFG.DIFFICULTY_DMG_MULT, state.difficulty - 1);
+  const spdMult = 1 + (state.difficulty - 1) * 0.08;
+  return {
+    x, y,
+    r: CFG.ENEMY_R,
+    hp: CFG.ENEMY_HP * hpMult,
+    maxHp: CFG.ENEMY_HP * hpMult,
+    damage: CFG.ENEMY_DMG * dmgMult,
+    speed: CFG.ENEMY_SPEED * spdMult,
+    vx: 0, vy: 0,
+    hitFlash: 0,
+    wobble: Math.random() * TAU,
+    exp: CFG.ENEMY_EXP,
+    alive: true,
+    linkHitT: new Map(),
+    wanderOffset: rand(0, TAU), // 让每个敌人路线略有不同
+  };
+}
+
+function makeBullet(x, y, dirX, dirY, dmg, owner) {
+  return {
+    x, y, vx: dirX * CFG.BULLET_SPEED, vy: dirY * CFG.BULLET_SPEED,
+    life: CFG.BULLET_LIFE,
+    r: CFG.BULLET_R,
+    dmg, owner: owner || 'player',
+    alive: true,
+  };
+}
+
+function makeShadowEcho(x, y) {
+  const lvl = state.archetypeEcho.level;
+  let dmgMult = CFG.ECHO_DMG_MULT;
+  if (lvl >= 4) dmgMult *= (1 + CFG.ECHO_DMG_LV4_BONUS);
+  let intv;
+  if (lvl >= 3) intv = CFG.ECHO_INTERVAL_LV3;
+  else if (lvl >= 2) intv = CFG.ECHO_INTERVAL_LV2;
+  else intv = CFG.ECHO_INTERVAL_BASE;
+  state.archetypeEcho.nextInterval = intv;
+  return {
+    x, y,
+    homeX: x, homeY: y,
+    r: CFG.PLAYER_RADIUS,
+    damage: getPlayerDamage() * dmgMult,
+    atkInt: getPlayerAttackInterval(),
+    atkCD: rand(0, 0.3),
+    life: CFG.ECHO_LIFE,
+    patrolR: CFG.ECHO_PATROL_R,
+    attackR: CFG.ECHO_ATTACK_R,
+    facing: { x: 0, y: -1 },
+    tx: x, ty: y,
+    wanderT: 0,
+    alive: true,
+  };
+}
+
+function makeVortex(x, y) {
+  const lvl = state.archetypeVortex.level;
+  let radius = CFG.VORTEX_R;
+  if (lvl >= 2) radius *= 1.10;
+  let dps = CFG.VORTEX_DPS;
+  if (lvl >= 3) dps *= 1.20;
+  return {
+    x, y,
+    r: radius,
+    dps,
+    life: CFG.VORTEX_LIFE,
+    tickT: 0,
+    spinT: 0,
+    alive: true,
+  };
+}
+
+function makeVortexProjectile(x, y, tx, ty) {
+  const d = norm(tx - x, ty - y);
+  return {
+    x, y,
+    vx: d.x * CFG.VORTEX_PROJ_SPEED, vy: d.y * CFG.VORTEX_PROJ_SPEED,
+    life: CFG.VORTEX_PROJ_LIFE,
+    r: 5,
+    damage: getPlayerDamage() * 0.85,
+    alive: true,
+  };
+}
+
+function makeDeathShadow(x, y) {
+  return { x, y, r: CFG.DEATH_SHADOW_R, life: CFG.DEATH_SHADOW_LIFE, alive: true, phase: Math.random() * TAU };
+}
+
+// ============================================================
+// 生成
+// ============================================================
+function spawnWave() {
+  const count = CFG.WAVE_BASE + state.waveIdx * CFG.WAVE_INC;
+  state.waveIdx++;
+  state.waveT = 0;
+  for (let i = 0; i < count; i++) spawnEnemy();
+  spawnParticle(player.x, player.y, '#ff5577', 6, 0.5, true);
+}
+
+function spawnEnemy() {
+  const ang = Math.random() * TAU;
+  const distR = rand(CFG.SPAWN_DIST_MIN, CFG.SPAWN_DIST_MAX);
+  let x = player.x + Math.cos(ang) * distR;
+  let y = player.y + Math.sin(ang) * distR;
+  x = clamp(x, -CFG.WORLD/2 + 30, CFG.WORLD/2 - 30);
+  y = clamp(y, -CFG.WORLD/2 + 30, CFG.WORLD/2 - 30);
+  // 检查与现有敌人的最小间距
+  let tries = 0;
+  while (tries < 6) {
+    let ok = true;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      if (dist2(x, y, e.x, e.y) < CFG.ENEMY_MIN_SPACING * CFG.ENEMY_MIN_SPACING) { ok = false; break; }
+    }
+    if (ok) break;
+    const a2 = Math.random() * TAU;
+    const d2 = rand(CFG.SPAWN_DIST_MIN, CFG.SPAWN_DIST_MAX);
+    x = clamp(player.x + Math.cos(a2)*d2, -CFG.WORLD/2+30, CFG.WORLD/2-30);
+    y = clamp(player.y + Math.sin(a2)*d2, -CFG.WORLD/2+30, CFG.WORLD/2-30);
+    tries++;
+  }
+  state.enemies.push(makeEnemy(x, y));
+}
+
+// ============================================================
+// 玩家更新
+// ============================================================
+function updatePlayer(dt) {
+  let mx = 0, my = 0;
+  if (keys['w'] || keys['arrowup'])    my -= 1;
+  if (keys['s'] || keys['arrowdown'])  my += 1;
+  if (keys['a'] || keys['arrowleft'])  mx -= 1;
+  if (keys['d'] || keys['arrowright']) mx += 1;
+  if (mx !== 0 || my !== 0) {
+    const n = norm(mx, my);
+    player.facing.x = n.x; player.facing.y = n.y;
+    player.x += n.x * player.speed * dt;
+    player.y += n.y * player.speed * dt;
+  }
+  const lim = CFG.WORLD/2 - player.r;
+  if (player.x < -lim) player.x = -lim;
+  if (player.x >  lim) player.x =  lim;
+  if (player.y < -lim) player.y = -lim;
+  if (player.y >  lim) player.y =  lim;
+
+  player.atkCD -= dt;
+  if (player.atkCD <= 0) {
+    player.atkCD = getPlayerAttackInterval();
+    const muzzle = player.r + 6;
+    state.bullets.push(makeBullet(
+      player.x + player.facing.x * muzzle,
+      player.y + player.facing.y * muzzle,
+      player.facing.x, player.facing.y,
+      getPlayerDamage(), 'player'
+    ));
+  }
+
+  if (player.invuln > 0) player.invuln -= dt;
+  if (player.flash  > 0) player.flash  -= dt;
+
+  // 与敌人接触伤害（用稍微小一点的碰撞距离，避免完全重叠时连续扣血）
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    const rr = (player.r * 0.6 + e.r * 0.6);
+    if (dist2(player.x, player.y, e.x, e.y) < rr * rr) {
+      if (player.invuln <= 0) {
+        player.hp -= e.damage;
+        player.invuln = CFG.PLAYER_INVULN;
+        player.flash  = CFG.PLAYER_INVULN;
+        state.camera.shake = Math.max(state.camera.shake, 8);
+        spawnFloatingText(player.x, player.y - 30, '-' + Math.round(e.damage), '#ff4477');
+        if (player.hp <= 0) { player.hp = 0; state.phase = 'gameover'; }
+      }
+    }
+  }
+}
+
+// ============================================================
+// 子弹
+// ============================================================
+function updateBullets(dt) {
+  for (const b of state.bullets) {
+    if (!b.alive) continue;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    if (b.life <= 0) { b.alive = false; continue; }
+    if (b.x < -CFG.WORLD/2 || b.x > CFG.WORLD/2 || b.y < -CFG.WORLD/2 || b.y > CFG.WORLD/2) {
+      b.alive = false; continue;
+    }
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      const rr = b.r + e.r;
+      if (dist2(b.x, b.y, e.x, e.y) < rr * rr) {
+        damageEnemy(e, b.dmg, b.x, b.y);
+        b.alive = false;
+        break;
+      }
+    }
+  }
+  state.bullets = state.bullets.filter(b => b.alive);
+}
+
+function damageEnemy(e, dmg, srcX, srcY) {
+  e.hp -= dmg;
+  e.hitFlash = 0.10;
+  spawnFloatingText(e.x, e.y - 22, '-' + Math.round(dmg), '#caa6ff');
+  spawnParticle(srcX, srcY, '#a070ff', 3, 0.18, false);
+  if (e.hp <= 0) killEnemy(e);
+}
+
+function killEnemy(e) {
+  if (!e.alive) return;
+  e.alive = false;
+  state.enemiesKilled++;
+  if (player.buffs.deathShadow > 0) {
+    for (let i = 0; i < player.buffs.deathShadow; i++) {
+      state.deathShadows.push(makeDeathShadow(e.x + rand(-6,6), e.y + rand(-6,6)));
+    }
+  }
+  spawnParticle(e.x, e.y, '#ff6688', 8, 0.4, true);
+  gainExp(e.exp);
+  // 立即从数组中移除，避免渲染死掉的敌人
+  const idx = state.enemies.indexOf(e);
+  if (idx >= 0) state.enemies.splice(idx, 1);
+}
+
+function gainExp(n) {
+  if (state.phase !== 'playing') return;
+  player.exp += n;
+  if (player.exp >= player.expNext) {
+    player.exp -= player.expNext;
+    player.level++;
+    player.expNext = Math.round(CFG.BASE_EXP * Math.pow(CFG.EXP_GROWTH, player.level - 1));
+    triggerLevelUp();
+  }
+}
+
+// ============================================================
+// 敌人
+// ============================================================
+function updateEnemies(dt) {
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    // 让每个敌人沿自己的角度围在玩家周围
+    const wobAng = e.wanderOffset + state.time * 0.5;
+    const orbitR = 26; // 每个敌人绕玩家一点点不同位置
+    const offX = Math.cos(wobAng) * orbitR;
+    const offY = Math.sin(wobAng) * orbitR;
+    const tx = player.x + offX;
+    const ty = player.y + offY;
+    const d = norm(tx - e.x, ty - e.y);
+    e.x += d.x * e.speed * dt;
+    e.y += d.y * e.speed * dt;
+    if (e.hitFlash > 0) e.hitFlash -= dt;
+    e.wobble += dt * 6;
+  }
+}
+
+function updateSpawner(dt) {
+  state.waveT += dt;
+  const alive = state.enemies.filter(e => e.alive).length;
+  if (alive < CFG.WAVE_MIN_COUNT || state.waveT >= CFG.WAVE_INTERVAL) spawnWave();
+  state.difficultyT += dt;
+  if (state.difficultyT >= CFG.DIFFICULTY_INTERVAL) {
+    state.difficultyT = 0;
+    state.difficulty++;
+    spawnParticle(player.x, player.y - 40, '#ff3344', 14, 0.7, true);
+  }
+}
+
+// ============================================================
+// 流派一：Echo
+// ============================================================
+function updateArchetypeEcho(dt) {
+  const A = state.archetypeEcho;
+  if (!A.active) return;
+
+  // 首先生成一个分身（首次延迟更短）
+  A.firstDelay -= dt;
+  if (A.firstDelay <= 0 && state.shadows.length === 0) {
+    state.shadows.push(makeShadowEcho(player.x, player.y));
+    A.spawnT = 0;
+    spawnParticle(player.x, player.y, '#9b6bff', 12, 0.6, true);
+  }
+
+  A.spawnT += dt;
+  if (A.spawnT >= A.nextInterval) {
+    A.spawnT = 0;
+    state.shadows.push(makeShadowEcho(player.x, player.y));
+    spawnParticle(player.x, player.y, '#9b6bff', 12, 0.6, true);
+  }
+
+  for (const s of state.shadows) {
+    if (!s.alive) continue;
+    s.life -= dt;
+    if (s.life <= 0) { s.alive = false; continue; }
+
+    s.wanderT -= dt;
+    if (s.wanderT <= 0) {
+      s.wanderT = rand(0.4, 1.2);
+      const ang = Math.random() * TAU;
+      const rr = Math.random() * s.patrolR;
+      s.tx = s.homeX + Math.cos(ang) * rr;
+      s.ty = s.homeY + Math.sin(ang) * rr;
+    }
+    const dx = s.tx - s.x, dy = s.ty - s.y;
+    const md = Math.hypot(dx, dy);
+    if (md > 1) {
+      s.x += (dx/md) * player.speed * 0.85 * dt;
+      s.y += (dy/md) * player.speed * 0.85 * dt;
+      s.facing.x = dx/md; s.facing.y = dy/md;
+    }
+
+    s.atkCD -= dt;
+    if (s.atkCD <= 0) {
+      let best = null, bd = s.attackR * s.attackR;
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        const dd = dist2(s.x, s.y, e.x, e.y);
+        if (dd < bd) { bd = dd; best = e; }
+      }
+      if (best) {
+        s.atkCD = getPlayerAttackInterval();
+        const d2 = norm(best.x - s.x, best.y - s.y);
+        s.facing.x = d2.x; s.facing.y = d2.y;
+        const muzzle = s.r + 6;
+        state.bullets.push(makeBullet(
+          s.x + d2.x * muzzle, s.y + d2.y * muzzle,
+          d2.x, d2.y, s.damage, 'shadow'
+        ));
+      } else {
+        s.atkCD = 0.15;
+      }
+    }
+  }
+  state.shadows = state.shadows.filter(s => s.alive);
+}
+
+// ============================================================
+// 流派二：Vortex
+// ============================================================
+function updateArchetypeVortex(dt) {
+  const A = state.archetypeVortex;
+  if (!A.active) return;
+
+  A.fireT += dt;
+  if (A.fireT >= CFG.VORTEX_INTERVAL) {
+    A.fireT = 0;
+    fireVortexProjectile();
+  }
+
+  for (const p of state.projectiles) {
+    if (!p.alive) continue;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0) { p.alive = false; continue; }
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      const rr = p.r + e.r;
+      if (dist2(p.x, p.y, e.x, e.y) < rr * rr) {
+        state.vortices.push(makeVortex(e.x, e.y));
+        spawnParticle(e.x, e.y, '#7a4dff', 14, 0.45, true);
+        p.alive = false;
+        break;
+      }
+    }
+  }
+  state.projectiles = state.projectiles.filter(p => p.alive);
+
+  for (const v of state.vortices) {
+    if (!v.alive) continue;
+    v.life -= dt;
+    v.tickT -= dt;
+    v.spinT += dt * 6;
+    if (v.life <= 0) { v.alive = false; continue; }
+    if (v.tickT <= 0) {
+      v.tickT = 0.2;
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        const rr = v.r + e.r;
+        if (dist2(v.x, v.y, e.x, e.y) < rr * rr) {
+          damageEnemy(e, v.dps * 0.2, v.x, v.y);
+        }
+      }
+    }
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      const d = dist(v.x, v.y, e.x, e.y);
+      if (d < v.r * 1.5 && d > 1) {
+        const f = (1 - d / (v.r * 1.5)) * CFG.VORTEX_PULL * dt;
+        const n = norm(v.x - e.x, v.y - e.y);
+        e.x += n.x * f;
+        e.y += n.y * f;
+      }
+    }
+  }
+  state.vortices = state.vortices.filter(v => v.alive);
+
+  if (A.level >= 5) {
+    if (state.vortices.length >= 2 && (state.riftCooldown || 0) <= 0) {
+      const a = state.vortices[0], b = state.vortices[1];
+      const reach = (a.r + b.r) * 1.4;
+      if (dist(a.x, a.y, b.x, b.y) <= reach) {
+        const SECTORS = 12;
+        const counts = new Array(SECTORS).fill(0);
+        const center = { x: (a.x + b.x)/2, y: (a.y + b.y)/2 };
+        for (const e of state.enemies) {
+          if (!e.alive) continue;
+          const ang = Math.atan2(e.y - center.y, e.x - center.x);
+          let idx = Math.floor(((ang + Math.PI) / TAU) * SECTORS);
+          if (idx < 0) idx += SECTORS;
+          if (idx >= SECTORS) idx -= SECTORS;
+          counts[idx]++;
+        }
+        const ranked = counts.map((c, i) => ({ c, i })).sort((x, y) => y.c - x.c);
+        const top3 = ranked.slice(0, 3);
+        const centerX = center.x, centerY = center.y;
+        const fireQueue = top3.map((it, k) => ({
+          angle: ((it.i + 0.5) / SECTORS) * TAU - Math.PI,
+          time: 0.5 + k * 0.5,
+          damage: getPlayerDamage() * 1.4,
+        }));
+        const rift = { a, b, centerX, centerY, fireQueue, time: 0, life: 4.5, alive: true, shot: [] };
+        state.rifts.push(rift);
+        state.riftCooldown = 2.0;
+        spawnParticle(centerX, centerY, '#a070ff', 18, 0.6, true);
+      }
+    }
+    if (state.riftCooldown) state.riftCooldown -= dt;
+  }
+
+  updateRifts(dt);
+  state.rifts = state.rifts.filter(r => r.alive);
+}
+
+function fireVortexProjectile() {
+  let best = null, bd = Infinity;
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    const dd = dist2(player.x, player.y, e.x, e.y);
+    if (dd < bd) { bd = dd; best = e; }
+  }
+  if (!best) return;
+  const count = state.archetypeVortex.level >= 4 ? 2 : 1;
+  for (let i = 0; i < count; i++) {
+    const aim = i === 0 ? best : findNthNearest(best, 1);
+    if (!aim) continue;
+    state.projectiles.push(makeVortexProjectile(player.x, player.y, aim.x, aim.y));
+  }
+}
+
+function findNthNearest(origin, n) {
+  const arr = state.enemies.filter(e => e.alive && e !== origin);
+  arr.sort((a, b) => dist2(a.x, a.y, origin.x, origin.y) - dist2(b.x, b.y, origin.x, origin.y));
+  return arr[n] || null;
+}
+
+function updateRifts(dt) {
+  for (const r of state.rifts) {
+    if (!r.alive) continue;
+    r.time += dt;
+    r.life -= dt;
+    if (r.life <= 0) { r.alive = false; continue; }
+    for (const fq of r.fireQueue) {
+      if (!fq.fired && r.time >= fq.time) {
+        fq.fired = true;
+        const len = 600;
+        const ax = r.centerX, ay = r.centerY;
+        const dx = Math.cos(fq.angle), dy = Math.sin(fq.angle);
+        for (const e of state.enemies) {
+          if (!e.alive) continue;
+          const ex = e.x - ax, ey = e.y - ay;
+          const proj = ex * dx + ey * dy;
+          if (proj < 0 || proj > len) continue;
+          const px = ax + dx * proj, py = ay + dy * proj;
+          if (dist2(px, py, e.x, e.y) < (e.r + 10) * (e.r + 10)) {
+            damageEnemy(e, fq.damage, e.x, e.y);
+          }
+        }
+        spawnParticle(ax + dx * len * 0.5, ay + dy * len * 0.5, '#b08bff', 10, 0.35, true);
+        r.shot.push({ x: ax, y: ay, dx, dy, len, t: 0 });
+      }
+    }
+  }
+}
+
+// ============================================================
+// 死亡暗影 & 暗影连线
+// ============================================================
+function updateDeathShadows(dt) {
+  for (const d of state.deathShadows) {
+    if (!d.alive) continue;
+    d.life -= dt;
+    d.phase += dt * 4;
+    if (d.life <= 0) d.alive = false;
+  }
+  state.deathShadows = state.deathShadows.filter(d => d.alive);
+}
+
+function getShadowEntityPoints() {
+  const pts = [];
+  pts.push({ x: player.x, y: player.y, owner: player });
+  for (const s of state.shadows) if (s.alive) pts.push({ x: s.x, y: s.y, owner: s });
+  for (const d of state.deathShadows) if (d.alive) pts.push({ x: d.x, y: d.y, owner: d });
+  for (const v of state.vortices) if (v.alive) pts.push({ x: v.x, y: v.y, owner: v });
+  return pts;
+}
+
+function updateShadowLinks(dt) {
+  state.links.length = 0;
+  const pts = getShadowEntityPoints();
+  for (const p of pts) {
+    if (p.owner === player) continue;
+    state.links.push({ ax: player.x, ay: player.y, bx: p.x, by: p.y });
+  }
+  if (player.buffs.link <= 0) return;
+  const dmg = CFG.SHADOW_LINK_DMG * (1 + (player.buffs.link - 1) * 0.5);
+  const cd = CFG.SHADOW_LINK_CD;
+  for (const e of state.enemies) {
+    if (!e.alive) continue;
+    for (const ln of state.links) {
+      const last = e.linkHitT.get(ln) || -10;
+      if (state.time - last < cd) continue;
+      if (pointSegmentDist(e.x, e.y, ln.ax, ln.ay, ln.bx, ln.by) < e.r + 3) {
+        e.linkHitT.set(ln, state.time);
+        damageEnemy(e, dmg, e.x, e.y);
+        break;
+      }
+    }
+  }
+}
+
+function pointSegmentDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const m2 = dx*dx + dy*dy;
+  if (m2 < 0.0001) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / m2;
+  t = clamp(t, 0, 1);
+  const cx = ax + dx * t, cy = ay + dy * t;
+  return Math.hypot(px - cx, py - cy);
+}
+
+// ============================================================
+// 升级卡牌
+// ============================================================
+const cardChoices = [];
+
+function triggerLevelUp() {
+  state.phase = 'levelup';
+  cardChoices.length = 0;
+  const pool = buildCardPool();
+  for (let i = 0; i < 3; i++) {
+    if (pool.length === 0) break;
+    const idx = randi(0, pool.length);
+    cardChoices.push(pool[idx]);
+    pool.splice(idx, 1);
+  }
+  if (cardChoices.length === 0) cardChoices.push({ kind: 'generic', id: 'damage', title: '伤害 +5%', desc: '提升主角伤害 5%', icon: '⚔', level: 1 });
+}
+
+function buildCardPool() {
+  const pool = [];
+  const genericMax = 5;
+  const genericList = [
+    { id: 'deathShadow', title: '死亡暗影', desc: '敌人死亡后留下 4 秒暗影', icon: '☠' },
+    { id: 'link',        title: '暗影连线', desc: '玩家与每个暗影连线伤敌', icon: '⌇' },
+    { id: 'maxHp',       title: '体质强化', desc: '玩家血量 +5%',         icon: '❤' },
+    { id: 'damage',      title: '锋利之影', desc: '玩家伤害 +5%',          icon: '⚔' },
+    { id: 'attackSpeed', title: '急速射击', desc: '玩家攻击速度 +10%',     icon: '⚡' },
+  ];
+  for (const g of genericList) {
+    const cur = player.buffs[g.id] || 0;
+    if (cur < genericMax) pool.push({ kind: 'generic', id: g.id, title: g.title, desc: g.desc, icon: g.icon, level: cur + 1 });
+  }
+  const curEcho = state.archetypeEcho.level;
+  if (state.archetypeChoice === 'echo' && curEcho < 5) {
+    const lv = curEcho + 1;
+    pool.push({ kind: 'archetype', id: 'echo', title: '回到过去 Lv' + lv, desc: echoDesc(lv), icon: '◐', level: lv });
+  }
+  const curVortex = state.archetypeVortex.level;
+  if (state.archetypeChoice === 'vortex' && curVortex < 5) {
+    const lv = curVortex + 1;
+    pool.push({ kind: 'archetype', id: 'vortex', title: '停止的暗影 Lv' + lv, desc: vortexDesc(lv), icon: '◉', level: lv });
+  }
+  return pool;
+}
+
+function echoDesc(lv) {
+  switch (lv) {
+    case 1: return '每 20s 生成一个暗影分身';
+    case 2: return '分身生成间隔 → 18s';
+    case 3: return '分身生成间隔 → 12s';
+    case 4: return '暗影分身伤害 +40%';
+    case 5: return '每存在一个暗影，主角攻速 +15%';
+  }
+}
+function vortexDesc(lv) {
+  switch (lv) {
+    case 1: return '每 2s 发射暗影投射物，命中生成漩涡';
+    case 2: return '漩涡半径 +10%';
+    case 3: return '漩涡伤害 +20%';
+    case 4: return '每次发射 2 个投射物';
+    case 5: return '漩涡两两生成暗影裂隙，向敌最多方向依次发射激光';
+  }
+}
+
+function applyCard(card) {
+  if (!card) return;
+  if (card.kind === 'generic') {
+    player.buffs[card.id] = (player.buffs[card.id] || 0) + 1;
+    if (card.id === 'maxHp') player.hp = Math.min(player.hp + 6, getPlayerMaxHp());
+  } else if (card.kind === 'archetype' && card.id === 'echo') {
+    state.archetypeEcho.level = card.level;
+    state.archetypeEcho.active = true;
+    state.archetypeEcho.spawnT = 0;
+    state.archetypeEcho.firstDelay = CFG.ECHO_FIRST_DELAY;
+  } else if (card.kind === 'archetype' && card.id === 'vortex') {
+    state.archetypeVortex.level = card.level;
+    state.archetypeVortex.active = true;
+    state.archetypeVortex.fireT = CFG.VORTEX_INTERVAL;
+  }
+  state.phase = 'playing';
+  spawnParticle(player.x, player.y, '#ffd86b', 20, 0.6, true);
+}
+
+function handleCardInput() {
+  if (state.phase !== 'levelup') return;
+  if (keyOnce['1'] && cardChoices[0]) applyCard(cardChoices[0]);
+  else if (keyOnce['2'] && cardChoices[1]) applyCard(cardChoices[1]);
+  else if (keyOnce['3'] && cardChoices[2]) applyCard(cardChoices[2]);
+}
+
+// ============================================================
+// 开场选择流派
+// ============================================================
+function handleArchetypeSelectInput() {
+  if (state.phase !== 'archetype') return;
+  if (keyOnce['1']) { startGame('echo'); }
+  else if (keyOnce['2']) { startGame('vortex'); }
+  else if (keyOnce['3']) { startGame('echo'); } // 默认 echo 也可按 3
+}
+
+function startGame(choice) {
+  state.archetypeChoice = choice;
+  if (choice === 'echo') {
+    state.archetypeEcho.active = true;
+    state.archetypeEcho.level = 1;
+    state.archetypeEcho.firstDelay = CFG.ECHO_FIRST_DELAY;
+    state.archetypeEcho.spawnT = 0;
+    state.archetypeEcho.nextInterval = CFG.ECHO_INTERVAL_BASE;
+  } else if (choice === 'vortex') {
+    state.archetypeVortex.active = true;
+    state.archetypeVortex.level = 1;
+    state.archetypeVortex.fireT = CFG.VORTEX_INTERVAL;
+  }
+  state.phase = 'playing';
+  spawnParticle(player.x, player.y, '#ffd86b', 30, 0.8, true);
+}
+
+// ============================================================
+// 粒子 & 飘字
+// ============================================================
+function spawnParticle(x, y, color, n, life, radial) {
+  for (let i = 0; i < n; i++) {
+    const ang = Math.random() * TAU;
+    const sp = radial ? rand(40, 180) : rand(20, 90);
+    state.particles.push({
+      x, y, vx: Math.cos(ang)*sp, vy: Math.sin(ang)*sp,
+      life: life * rand(0.7, 1.2), maxLife: life,
+      color, size: rand(1.5, 3.5),
+    });
+  }
+}
+function spawnFloatingText(x, y, text, color) {
+  state.floatingText.push({ x, y, text, color, life: 0.8, maxLife: 0.8 });
+}
+function updateParticles(dt) {
+  for (const p of state.particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vx *= 0.92; p.vy *= 0.92;
+    p.life -= dt;
+  }
+  state.particles = state.particles.filter(p => p.life > 0);
+  for (const f of state.floatingText) {
+    f.y -= 30 * dt;
+    f.life -= dt;
+  }
+  state.floatingText = state.floatingText.filter(f => f.life > 0);
+}
+
+// ============================================================
+// 摄像机
+// ============================================================
+function updateCamera(dt) {
+  const tx = player.x, ty = player.y;
+  state.camera.x += (tx - state.camera.x) * Math.min(1, dt * 8);
+  state.camera.y += (ty - state.camera.y) * Math.min(1, dt * 8);
+  if (state.camera.shake > 0) state.camera.shake -= dt * 18;
+}
+
+// ============================================================
+// 主循环
+// ============================================================
+function update(dt) {
+  if (state.phase === 'gameover') return;
+  state.time += dt;
+
+  if (state.phase === 'playing') {
+    updatePlayer(dt);
+    updateBullets(dt);
+    updateEnemies(dt);
+    updateSpawner(dt);
+    updateArchetypeEcho(dt);
+    updateArchetypeVortex(dt);
+    updateDeathShadows(dt);
+    updateShadowLinks(dt);
+  }
+  // 粒子与摄像机在所有阶段都跑（包括 levelup / archetype 选择）
+  updateParticles(dt);
+  updateCamera(dt);
+}
+
+let lastT = performance.now();
+function loop(now) {
+  let dt;
+  if (typeof now === 'number' && now > 0) {
+    dt = (now - lastT) / 1000;
+    lastT = now;
+  } else {
+    const t = Date.now();
+    dt = (t - lastT) / 1000;
+    lastT = t;
+  }
+  if (dt > 0.05) dt = 0.05;
+
+  // 关键：先处理输入，再清空 keyOnce，否则按键会被吞掉
+  handleArchetypeSelectInput();
+  handleCardInput();
+  update(dt);
+  render(dt);
+  for (const k in keyOnce) keyOnce[k] = false;
+
+  requestAnimationFrame(loop);
+  // 兜底已被 startLoopFallback() 设置，跳过避免重复
+}
+
+// ============================================================
+// 渲染
+// ============================================================
+function worldToScreen(x, y) {
+  const shake = state.camera.shake;
+  return {
+    x: x - state.camera.x + canvas.width / 2 + (shake > 0 ? rand(-shake, shake) : 0),
+    y: y - state.camera.y + canvas.height / 2 + (shake > 0 ? rand(-shake, shake) : 0),
+  };
+}
+
+function drawSprite(name, x, y, scale, alpha) {
+  const img = SPRITE[name];
+  if (!img || !img.complete || img.naturalWidth === 0) return false;
+  const w = img.naturalWidth * scale;
+  const h = img.naturalHeight * scale;
+  if (alpha != null) ctx.globalAlpha = alpha;
+  ctx.drawImage(img, x - w / 2, y - h / 2, w, h);
+  if (alpha != null) ctx.globalAlpha = 1;
+  return true;
+}
+
+function spriteReady(name) {
+  const img = SPRITE[name];
+  return img && img.complete && img.naturalWidth > 0;
+}
+
+function render(dt) {
+  // 灰色地图背景
+  const grad = ctx.createRadialGradient(
+    canvas.width/2, canvas.height/2, 60,
+    canvas.width/2, canvas.height/2, Math.max(canvas.width, canvas.height) * 0.8
+  );
+  grad.addColorStop(0, '#5e5e66');
+  grad.addColorStop(0.7, '#4a4a52');
+  grad.addColorStop(1, '#2c2c33');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawGrid();
+  drawWorldBounds();
+  drawShadowLinks();
+  for (const d of state.deathShadows) drawDeathShadow(d);
+  for (const s of state.shadows) drawShadowEcho(s);
+  for (const v of state.vortices) drawVortex(v);
+  for (const r of state.rifts) drawRift(r);
+  for (const p of state.projectiles) drawVortexProjectile(p);
+
+  // 敌人
+  for (const e of state.enemies) drawEnemy(e);
+
+  // 子弹
+  for (const b of state.bullets) drawBullet(b);
+
+  // 玩家永远在怪物之上绘制
+  drawPlayer();
+
+  // 粒子
+  for (const p of state.particles) {
+    const s = worldToScreen(p.x, p.y);
+    ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(s.x - p.size/2, s.y - p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+
+  // 飘字
+  for (const f of state.floatingText) {
+    const s = worldToScreen(f.x, f.y);
+    ctx.globalAlpha = clamp(f.life / f.maxLife, 0, 1);
+    ctx.fillStyle = f.color;
+    ctx.font = 'bold 14px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(f.text, s.x, s.y);
+  }
+  ctx.globalAlpha = 1;
+
+  drawHUD();
+
+  if (state.phase === 'archetype') drawArchetypeSelect();
+  if (state.phase === 'levelup')    drawCardUI();
+  if (state.phase === 'gameover')   drawGameOver();
+}
+
+function drawGrid() {
+  const step = 64;
+  const w = canvas.width, h = canvas.height;
+  const left = state.camera.x - w/2;
+  const top  = state.camera.y - h/2;
+  const right = state.camera.x + w/2;
+  const bottom = state.camera.y + h/2;
+  ctx.strokeStyle = 'rgba(20,20,25,0.20)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const startX = Math.floor(left / step) * step;
+  const startY = Math.floor(top / step) * step;
+  for (let x = startX; x <= right; x += step) {
+    const s = worldToScreen(x, 0);
+    ctx.moveTo(s.x, 0); ctx.lineTo(s.x, h);
+  }
+  for (let y = startY; y <= bottom; y += step) {
+    const s = worldToScreen(0, y);
+    ctx.moveTo(0, s.y); ctx.lineTo(w, s.y);
+  }
+  ctx.stroke();
+}
+
+function drawWorldBounds() {
+  const a = worldToScreen(-CFG.WORLD/2, -CFG.WORLD/2);
+  ctx.strokeStyle = 'rgba(20,20,25,0.55)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(a.x, a.y, CFG.WORLD, CFG.WORLD);
+}
+
+function drawPlayer() {
+  const s = worldToScreen(player.x, player.y);
+  const flash = player.flash > 0;
+  const ready = spriteReady('hero');
+  const scale = ready ? SPRITE_SCALE.hero : 1.0;
+  // 先画一个柔和的白色光环，让玩家在怪物堆中也清晰可见
+  const haloR = (ready ? 60 : player.r + 8);
+  const halo = ctx.createRadialGradient(s.x, s.y + 4, 4, s.x, s.y + 4, haloR);
+  halo.addColorStop(0, 'rgba(255,255,255,0.28)');
+  halo.addColorStop(0.7, 'rgba(180,160,255,0.10)');
+  halo.addColorStop(1, 'rgba(180,160,255,0)');
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(s.x, s.y + 4, haloR, 0, TAU); ctx.fill();
+  // 描边（让玩家更突出）
+  ctx.strokeStyle = flash ? 'rgba(255,120,160,0.9)' : 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(s.x, s.y + 4, (ready ? SPRITE.hero.naturalWidth : player.r * 2) * scale * 0.5 + 2, 0, TAU); ctx.stroke();
+  // 主角 sprite
+  if (ready) {
+    drawSprite('hero', s.x, s.y + 4, scale, flash ? 0.6 : 1);
+  } else {
+    ctx.fillStyle = flash ? '#ffffff' : '#e7e2ff';
+    ctx.beginPath(); ctx.arc(s.x, s.y, player.r, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#ff3355';
+    ctx.fillRect(s.x - 5, s.y - 2, 3, 3);
+    ctx.fillRect(s.x + 2, s.y - 2, 3, 3);
+  }
+  // 朝向指示
+  const fx = player.facing.x, fy = player.facing.y;
+  const mx = s.x + fx * (player.r + 8);
+  const my = s.y + fy * (player.r + 8);
+  ctx.fillStyle = '#a070ff';
+  ctx.beginPath(); ctx.arc(mx, my, 4, 0, TAU); ctx.fill();
+  // 无敌帧光环
+  if (player.invuln > 0) {
+    ctx.strokeStyle = 'rgba(255,80,120,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(s.x, s.y, player.r + 6, 0, TAU); ctx.stroke();
+  }
+}
+
+function drawEnemy(e) {
+  if (!e.alive) return;
+  const s = worldToScreen(e.x, e.y);
+  const flash = e.hitFlash > 0;
+  const ready = spriteReady('monster');
+  const scale = ready ? SPRITE_SCALE.monster : 1.0;
+  if (ready) {
+    drawSprite('monster', s.x, s.y + 4, scale, flash ? 0.5 : 1);
+  } else {
+    ctx.fillStyle = flash ? '#ffffff' : '#f0e9ff';
+    ctx.fillRect(s.x - e.r, s.y - e.r, e.r * 2, e.r * 2);
+    ctx.fillStyle = '#ff2244';
+    ctx.fillRect(s.x - 5, s.y - 2, 4, 4);
+    ctx.fillRect(s.x + 1, s.y - 2, 4, 4);
+  }
+  const barW = e.r * 2 + 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(s.x - barW/2, s.y - e.r - 10, barW, 3);
+  ctx.fillStyle = '#ff4477';
+  ctx.fillRect(s.x - barW/2, s.y - e.r - 10, barW * Math.max(0, e.hp / e.maxHp), 3);
+}
+
+function drawShadowEcho(s) {
+  const sp = worldToScreen(s.x, s.y);
+  const ready = spriteReady('shadow');
+  const scale = ready ? SPRITE_SCALE.shadow : 1.0;
+  if (ready) {
+    drawSprite('shadow', sp.x, sp.y + 4, scale);
+  } else {
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = '#5a2bb0';
+    ctx.beginPath(); ctx.arc(sp.x, sp.y, s.r + 2, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#3a1880';
+    ctx.beginPath(); ctx.arc(sp.x, sp.y, s.r, 0, TAU); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#c79bff';
+    ctx.fillRect(sp.x - 4, sp.y - 1, 3, 3);
+    ctx.fillRect(sp.x + 1, sp.y - 1, 3, 3);
+  }
+  const lifeRatio = s.life / CFG.ECHO_LIFE;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(sp.x - 14, sp.y - s.r - 14, 28, 3);
+  ctx.fillStyle = '#9b6bff';
+  ctx.fillRect(sp.x - 14, sp.y - s.r - 14, 28 * lifeRatio, 3);
+  if (state.archetypeEcho.level < 5) {
+    const home = worldToScreen(s.homeX, s.homeY);
+    ctx.strokeStyle = 'rgba(155,107,255,0.18)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(home.x, home.y, s.patrolR, 0, TAU); ctx.stroke();
+  }
+}
+
+function drawVortex(v) {
+  const sp = worldToScreen(v.x, v.y);
+  const r = v.r;
+  const lifeRatio = v.life / CFG.VORTEX_LIFE;
+  for (let i = 0; i < 4; i++) {
+    const rr = r * (1 - i * 0.22);
+    ctx.strokeStyle = `rgba(140,80,255,${0.55 - i * 0.10})`;
+    ctx.lineWidth = 2 + i;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, rr, v.spinT * (1 - i * 0.1), v.spinT * (1 - i * 0.1) + Math.PI * 1.5);
+    ctx.stroke();
+  }
+  ctx.fillStyle = `rgba(170,100,255,${0.3 + lifeRatio * 0.3})`;
+  ctx.beginPath(); ctx.arc(sp.x, sp.y, r * 0.25, 0, TAU); ctx.fill();
+}
+
+function drawVortexProjectile(p) {
+  const sp = worldToScreen(p.x, p.y);
+  ctx.fillStyle = '#caa6ff';
+  ctx.beginPath(); ctx.arc(sp.x, sp.y, p.r, 0, TAU); ctx.fill();
+  ctx.fillStyle = 'rgba(202,166,255,0.4)';
+  ctx.beginPath(); ctx.arc(sp.x, sp.y, p.r * 2.5, 0, TAU); ctx.fill();
+}
+
+function drawDeathShadow(d) {
+  const sp = worldToScreen(d.x, d.y);
+  const a = clamp(d.life / CFG.DEATH_SHADOW_LIFE, 0, 1);
+  ctx.globalAlpha = 0.55 * a;
+  ctx.fillStyle = '#6a3cff';
+  ctx.beginPath(); ctx.arc(sp.x, sp.y, d.r + 2 + Math.sin(d.phase), 0, TAU); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#b48bff';
+  ctx.beginPath(); ctx.arc(sp.x, sp.y, d.r - 2, 0, TAU); ctx.fill();
+}
+
+function drawShadowLinks() {
+  if (player.buffs.link <= 0) return;
+  const alpha = clamp(0.25 + player.buffs.link * 0.05, 0.2, 0.5);
+  ctx.strokeStyle = `rgba(160,110,255,${alpha})`;
+  ctx.lineWidth = 1.2;
+  for (const ln of state.links) {
+    const a = worldToScreen(ln.ax, ln.ay);
+    const b = worldToScreen(ln.bx, ln.by);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+}
+
+function drawRift(r) {
+  const a = worldToScreen(r.a.x, r.a.y);
+  const b = worldToScreen(r.b.x, r.b.y);
+  ctx.strokeStyle = 'rgba(170,110,255,0.35)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  for (const sh of r.shot) {
+    const ax = worldToScreen(sh.x, sh.y);
+    const len = sh.len;
+    const bx = ax.x + sh.dx * len;
+    const by = ax.y + sh.dy * len;
+    ctx.strokeStyle = `rgba(200,150,255,${0.7 - sh.t * 1.5})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(ax.x, ax.y); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.strokeStyle = `rgba(255,255,255,${0.5 - sh.t * 1.5})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(ax.x, ax.y); ctx.lineTo(bx, by); ctx.stroke();
+  }
+  for (const sh of r.shot) sh.t += 1/60;
+}
+
+function drawBullet(b) {
+  if (!isFinite(b.x) || !isFinite(b.y) || !isFinite(b.vx) || !isFinite(b.vy)) return;
+  const s = worldToScreen(b.x, b.y);
+  if (!isFinite(s.x) || !isFinite(s.y)) return;
+  const tailLen = 0.08;
+  const tx = b.x - b.vx * tailLen;
+  const ty = b.y - b.vy * tailLen;
+  const ts = worldToScreen(tx, ty);
+  if (!isFinite(ts.x) || !isFinite(ts.y)) return;
+  const grad = ctx.createLinearGradient(s.x, s.y, ts.x, ts.y);
+  grad.addColorStop(0, b.owner === 'shadow' ? 'rgba(170,120,255,0.9)' : 'rgba(220,180,255,1)');
+  grad.addColorStop(1, 'rgba(120,60,220,0)');
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = b.owner === 'shadow' ? 2 : 3;
+  ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(ts.x, ts.y); ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(s.x, s.y, b.r * 0.7, 0, TAU); ctx.fill();
+}
+
+// ============================================================
+// HUD
+// ============================================================
+let hudCache = '';
+let hudTimer = 0;
+function drawHUD(dt) {
+  hudTimer -= dt;
+  const el = document.getElementById('hud');
+  if (!el) return;
+  const lines = [];
+  lines.push(`<b>HP</b> ${Math.round(player.hp)}/${Math.round(getPlayerMaxHp())}  ` +
+             `<b>LV</b> ${player.level}  <b>EXP</b> ${player.exp}/${player.expNext}  ` +
+             `<b>Wave</b> ${state.waveIdx}  <b>Tier</b> ${state.difficulty}`);
+  lines.push(`<b>Dmg</b> ${getPlayerDamage().toFixed(1)}  ` +
+             `<b>Atk/s</b> ${(1 / getPlayerAttackInterval()).toFixed(2)}  ` +
+             `<b>Spd</b> ${player.speed.toFixed(0)}`);
+  const echoInfo = state.archetypeEcho.active ? `Echo Lv${state.archetypeEcho.level}×${state.shadows.length}` : 'Echo ✗';
+  const vortexInfo = state.archetypeVortex.active ? `Vortex Lv${state.archetypeVortex.level}` : 'Vortex ✗';
+  lines.push(`<span class="ok">${echoInfo}</span>  <span class="ok">${vortexInfo}</span>`);
+  lines.push(`Buffs: HP×${player.buffs.maxHp}  DMG×${player.buffs.damage}  SPD×${player.buffs.attackSpeed}  DeathShad×${player.buffs.deathShadow}  Link×${player.buffs.link}`);
+  const text = lines.join('<br/>');
+  if (hudTimer <= 0 || text !== hudCache) {
+    el.innerHTML = text;
+    hudCache = text;
+    hudTimer = 0.2;
+  }
+}
+
+// ============================================================
+// 开场选择流派 UI
+// ============================================================
+function drawArchetypeSelect() {
+  ctx.fillStyle = 'rgba(4,1,12,0.85)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#ffd86b';
+  ctx.font = 'bold 32px Consolas, monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff8a3d';
+  ctx.shadowBlur = 22;
+  ctx.fillText('暗影大人', canvas.width / 2, 90);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = '#b39bff';
+  ctx.font = '14px Consolas, monospace';
+  ctx.fillText('选择你的流派，开启无尽黑夜', canvas.width / 2, 125);
+
+  // 两个大卡牌
+  const cardW = 320, cardH = 400, gap = 40;
+  const totalW = cardW * 2 + gap;
+  const startX = (canvas.width - totalW) / 2;
+  const y = canvas.height / 2 - cardH / 2;
+
+  drawArchetypeCard(startX, y, cardW, cardH, {
+    id: 'echo',
+    title: '回到过去',
+    sub: 'Shadow Echo',
+    desc: '在原地种下过去的自己\n暗影分身会主动出击\n适合持续作战',
+    icon: '◐',
+    color: '#c79bff',
+  }, 1);
+
+  drawArchetypeCard(startX + cardW + gap, y, cardW, cardH, {
+    id: 'vortex',
+    title: '停止的暗影',
+    sub: 'Shadow Vortex',
+    desc: '暗影投射物命中生成漩涡\n漩涡吸引并持续伤害\n适合爆发清场',
+    icon: '◉',
+    color: '#ffd86b',
+  }, 2);
+
+  ctx.fillStyle = '#8a6cff';
+  ctx.font = '13px Consolas, monospace';
+  ctx.fillText('按 1 选择 回到过去    ·    按 2 选择 停止的暗影', canvas.width / 2, y + cardH + 40);
+}
+
+function drawArchetypeCard(x, y, w, h, c, idx) {
+  const g = ctx.createLinearGradient(x, y, x, y + h);
+  g.addColorStop(0, '#22103e');
+  g.addColorStop(1, '#0d0428');
+  ctx.fillStyle = g;
+  roundRect(x, y, w, h, 16);
+  ctx.fill();
+
+  ctx.strokeStyle = c.color;
+  ctx.lineWidth = 3;
+  roundRect(x + 2, y + 2, w - 4, h - 4, 14);
+  ctx.stroke();
+
+  // 顶部小标
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 14px Consolas, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('[' + idx + ']', x + 16, y + 26);
+
+  // 右上 key hint
+  ctx.fillStyle = c.color;
+  ctx.textAlign = 'right';
+  ctx.font = '12px Consolas, monospace';
+  ctx.fillText('按 ' + idx, x + w - 16, y + 26);
+
+  // 大图标
+  ctx.textAlign = 'center';
+  ctx.fillStyle = c.color;
+  ctx.font = 'bold 100px Consolas, monospace';
+  ctx.shadowColor = c.color;
+  ctx.shadowBlur = 30;
+  ctx.fillText(c.icon, x + w / 2, y + 150);
+  ctx.shadowBlur = 0;
+
+  // 标题
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 24px Consolas, monospace';
+  ctx.fillText(c.title, x + w / 2, y + 200);
+  ctx.fillStyle = c.color;
+  ctx.font = '12px Consolas, monospace';
+  ctx.fillText(c.sub, x + w / 2, y + 222);
+
+  // 描述
+  ctx.fillStyle = '#cbb8ff';
+  ctx.font = '13px Consolas, monospace';
+  const lines = c.desc.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], x + w / 2, y + 270 + i * 22);
+  }
+
+  // 底部
+  ctx.fillStyle = c.color;
+  ctx.font = 'bold 16px Consolas, monospace';
+  ctx.fillText('点击选择 →', x + w / 2, y + h - 24);
+}
+
+// ============================================================
+// 升级卡牌 UI
+// ============================================================
+function drawCardUI() {
+  ctx.fillStyle = 'rgba(4,1,12,0.78)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#ffd86b';
+  ctx.font = 'bold 28px Consolas, monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff8a3d';
+  ctx.shadowBlur = 18;
+  ctx.fillText('— 获得 BUFF —', canvas.width / 2, 80);
+  ctx.shadowBlur = 0;
+
+  const cardW = 220, cardH = 280, gap = 28;
+  const totalW = cardW * 3 + gap * 2;
+  const startX = (canvas.width - totalW) / 2;
+  const y = canvas.height / 2 - cardH / 2;
+
+  for (let i = 0; i < 3; i++) {
+    const c = cardChoices[i];
+    if (!c) continue;
+    const x = startX + i * (cardW + gap);
+    drawCard(x, y, cardW, cardH, c, i + 1);
+  }
+
+  ctx.fillStyle = '#b39bff';
+  ctx.font = '14px Consolas, monospace';
+  ctx.fillText('按 1 / 2 / 3 选择', canvas.width / 2, y + cardH + 40);
+}
+
+function drawCard(x, y, w, h, c, idx) {
+  const g = ctx.createLinearGradient(x, y, x, y + h);
+  g.addColorStop(0, '#2a1854');
+  g.addColorStop(1, '#15082e');
+  ctx.fillStyle = g;
+  roundRect(x, y, w, h, 12);
+  ctx.fill();
+
+  ctx.strokeStyle = c.kind === 'archetype' ? '#ffd86b' : '#8a6cff';
+  ctx.lineWidth = 2;
+  roundRect(x + 1, y + 1, w - 2, h - 2, 11);
+  ctx.stroke();
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px Consolas, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('[' + idx + ']', x + 12, y + 22);
+
+  ctx.fillStyle = c.kind === 'archetype' ? '#ffd86b' : '#b39bff';
+  ctx.textAlign = 'right';
+  ctx.fillText(c.kind === 'archetype' ? '流派' : '通用', x + w - 12, y + 22);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = c.kind === 'archetype' ? '#3a1f10' : '#1d0a4a';
+  ctx.beginPath(); ctx.arc(x + w/2, y + 90, 38, 0, TAU); ctx.fill();
+  ctx.strokeStyle = c.kind === 'archetype' ? '#ffd86b' : '#a070ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x + w/2, y + 90, 38, 0, TAU); ctx.stroke();
+  ctx.fillStyle = c.kind === 'archetype' ? '#ffe7a8' : '#e0cfff';
+  ctx.font = 'bold 36px Consolas, monospace';
+  ctx.fillText(c.icon, x + w/2, y + 102);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 16px Consolas, monospace';
+  ctx.fillText(c.title, x + w/2, y + 158);
+
+  const starN = c.kind === 'archetype' ? c.level : (c.level || 1);
+  drawStars(x + w/2, y + 180, starN);
+
+  ctx.fillStyle = '#cbb8ff';
+  ctx.font = '12px Consolas, monospace';
+  wrapText(c.desc, x + 16, y + 210, w - 32, 16);
+
+  ctx.fillStyle = c.kind === 'archetype' ? '#ffd86b' : '#8a6cff';
+  ctx.font = '11px Consolas, monospace';
+  const bot = c.kind === 'archetype' ? (state.archetypeChoice === 'echo' ? '回到过去' : '停止的暗影') : '通用 BUFF';
+  ctx.fillText(bot, x + w/2, y + h - 14);
+}
+
+function drawStars(cx, cy, n) {
+  for (let i = 0; i < 5; i++) {
+    const sx = cx - 40 + i * 20;
+    ctx.fillStyle = i < n ? '#ffd86b' : '#3a2a64';
+    ctx.font = '16px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('★', sx, cy);
+  }
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function wrapText(text, x, y, maxWidth, lh) {
+  const chars = text.split('');
+  let line = '';
+  for (const ch of chars) {
+    const test = line + ch;
+    if (ctx.measureText(test).width > maxWidth && line.length > 0) {
+      ctx.fillText(line, x + maxWidth / 2, y);
+      line = ch; y += lh;
+    } else {
+      line = test;
+    }
+  }
+  if (line) ctx.fillText(line, x + maxWidth / 2, y);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(8,2,16,0.85)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#ff3355';
+  ctx.font = 'bold 48px Consolas, monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff003c'; ctx.shadowBlur = 24;
+  ctx.fillText('影子吞噬了你', canvas.width / 2, canvas.height / 2 - 20);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#b39bff';
+  ctx.font = '16px Consolas, monospace';
+  ctx.fillText('存活时间 ' + state.time.toFixed(1) + 's  ·  击杀 ' + state.enemiesKilled,
+               canvas.width / 2, canvas.height / 2 + 20);
+  ctx.fillStyle = '#ffd86b';
+  ctx.font = '14px Consolas, monospace';
+  ctx.fillText('按 R 重新开始', canvas.width / 2, canvas.height / 2 + 60);
+}
+
+// ============================================================
+// 重新开始
+// ============================================================
+function resetGame() {
+  state.phase = 'archetype';
+  state.archetypeChoice = null;
+  state.time = 0;
+  state.difficulty = 1;
+  state.difficultyT = 0;
+  state.waveT = 0;
+  state.waveIdx = 0;
+  state.enemies.length = 0;
+  state.bullets.length = 0;
+  state.shadows.length = 0;
+  state.vortices.length = 0;
+  state.deathShadows.length = 0;
+  state.projectiles.length = 0;
+  state.rifts.length = 0;
+  state.particles.length = 0;
+  state.floatingText.length = 0;
+  state.links.length = 0;
+  state.enemiesKilled = 0;
+  state.archetypeEcho = { active: false, level: 0, spawnT: 0, nextInterval: CFG.ECHO_INTERVAL_BASE, firstDelay: 0 };
+  state.archetypeVortex = { active: false, level: 0, fireT: 0 };
+  state.riftCooldown = 0;
+  state.camera.x = 0; state.camera.y = 0; state.camera.shake = 0;
+  player.x = 0; player.y = 0;
+  player.facing = { x: 0, y: -1 };
+  player.hp = CFG.PLAYER_MAX_HP;
+  player.damage = CFG.PLAYER_DAMAGE;
+  player.atkInt = CFG.PLAYER_ATK_INT;
+  player.atkCD = 0;
+  player.speed = CFG.PLAYER_SPEED;
+  player.level = 1;
+  player.exp = 0;
+  player.expNext = CFG.BASE_EXP;
+  player.invuln = 0;
+  player.flash = 0;
+  player.buffs = { deathShadow: 0, link: 0, maxHp: 0, damage: 0, attackSpeed: 0 };
+  cardChoices.length = 0;
+}
+
+window.addEventListener('keydown', e => {
+  if (state.phase === 'gameover' && e.key.toLowerCase() === 'r') resetGame();
+});
+
+// 启动 - 双保险：RAF + setInterval
+// setInterval 兜底必须立即设置，不能等 loop 第一次运行（headless / 后台 tab 下 RAF 不触发）
+function startLoopFallback() {
+  setInterval(() => {
+    const t = Date.now();
+    const ddt = Math.min(0.05, (t - lastT) / 1000);
+    if (ddt > 0) {
+      lastT = t;
+      handleArchetypeSelectInput();
+      handleCardInput();
+      update(ddt);
+      render(ddt);
+      for (const k in keyOnce) keyOnce[k] = false;
+    }
+  }, 33);
+}
+startLoopFallback();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

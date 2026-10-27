@@ -34,20 +34,52 @@
         <h3>回到过去</h3>
         <p class="genre-name-en">Shadow Echo</p>
         <ul>
-          <li>在原地生成暗影分身</li>
+          <li>奴役暗影分身</li>
         </ul>
         <div class="genre-badge">召唤流</div>
       </div>
       <div class="genre-card" id="card-genre-1" onclick="Game.selectGenre(1)">
         <div class="genre-card-glow g1"></div>
         <div class="genre-icon">🌀</div>
-        <h3>停止的暗影</h3>
+        <h3>黑洞</h3>
         <p class="genre-name-en">Shadow Vortex</p>
         <ul>
-          <li>掌握暗影漩涡</li>
+          <li>掌控暗影漩涡</li>
         </ul>
         <div class="genre-badge">控场流</div>
       </div>
+      <div class="genre-card" id="card-genre-2" onclick="Game.selectGenre(2)">
+        <div class="genre-card-glow g3"></div>
+        <div class="genre-icon">🩸</div>
+        <h3>不灭</h3>
+        <p class="genre-name-en">Shadow Undying</p>
+        <ul>
+          <li>吞噬死亡余烬，将恢复化为护壳</li>
+        </ul>
+        <div class="genre-badge">汲取流</div>
+      </div>
+      <div class="genre-card" id="card-genre-3" onclick="Game.selectGenre(3)">
+        <div class="genre-card-glow g2"></div>
+        <div class="genre-icon">⏳</div>
+        <h3>因果残响</h3>
+        <p class="genre-name-en">Causal Echo</p>
+        <ul>
+          <li>让一次攻击在未来再次发生</li>
+        </ul>
+        <div class="genre-badge">连锁流</div>
+      </div>
+      <div class="genre-card" id="card-genre-4" onclick="Game.selectGenre(4)">
+        <div class="genre-card-glow g4"></div>
+        <div class="genre-icon">🔮</div>
+        <h3>不息的暗影</h3>
+        <p class="genre-name-en">Shadow Ricochet</p>
+        <ul>
+          <li>召回一颗弹球蓄能发射，让雷霆在反弹之间不断扩散</li>
+        </ul>
+        <div class="genre-badge">弹射流</div>
+      </div>
+    </div>
+  </div>
     </div>
   </div>
 
@@ -90,6 +122,8 @@
     <div id="hud-boss-timer" class="hud-boss-timer">BOSS还有 90 秒出现</div>
     <!-- BOSS 警告（屏幕顶部，共享血条下方，仅 BOSS 触发时显示） -->
     <div id="hud-boss-warning" class="hud-boss-warning hidden">⚠ BOSS 伤害极高注意躲避！</div>
+    <!-- 暗影轨道场一次性教学提示（弹射流首次进入时显示，不遮挡战斗） -->
+        <div id="hud-orbit-hint" class="hud-orbit-hint hidden">弹球会在暗影轨道场内反弹。撞击敌人、边界和磁极残核时会改变轨迹。</div>
 
     <div class="hud-left">
       <div class="hud-level">Lv.<span id="hud-level-num">1</span></div>
@@ -118,6 +152,12 @@
   <script src="js/shadow.js"></script>
   <script src="js/vortex.js"></script>
   <script src="js/shadowlink.js"></script>
+  <script src="js/echo.js"></script>
+  <script src="js/whiterupture.js"></script>
+  <script src="js/skythunder.js"></script>
+  <script src="js/undying.js"></script>
+  <script src="js/ricochet.js"></script>
+  <script src="js/orbitfield.js"></script>
   <script src="js/enemy.js"></script>
   <script src="js/player.js"></script>
   <script src="js/genre.js"></script>

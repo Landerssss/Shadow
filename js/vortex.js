@@ -283,7 +283,10 @@ const VortexManager = {
     // Update vortices (会 push rift / lightning)
     for (let i = this.vortices.length - 1; i >= 0; i--) {
       this.vortices[i].update(dt, enemies, state);
-      if (!this.vortices[i].alive) this.vortices.splice(i, 1);
+      if (!this.vortices[i].alive) {
+        ShadowLink.forget(this.vortices[i].id); // 释放该漩涡的命中记录
+        this.vortices.splice(i, 1);
+      }
     }
 
     // Update rifts (完成后做 LV7 融合)
@@ -385,8 +388,8 @@ const VortexManager = {
     let best = null, bestD = Infinity;
     for (const e of enemies) {
       if (!e.alive) continue;
-      const d = Utils.dist(player, e);
-      if (d < bestD) { bestD = d; best = e; }
+      const dSq = Utils.distSq(player, e);
+      if (dSq < bestD) { bestD = dSq; best = e; }
     }
     return best;
   },

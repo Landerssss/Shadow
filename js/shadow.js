@@ -85,11 +85,11 @@ class ShadowClone {
   }
 
   _nearestEnemy(enemies) {
-    let best = null, bestD = Infinity;
+    let best = null, bestD = 400 * 400;
     for (const e of enemies) {
       if (!e.alive) continue;
-      const d = Utils.dist(this, e);
-      if (d < 400 && d < bestD) { bestD = d; best = e; }
+      const dSq = Utils.distSq(this, e);
+      if (dSq < bestD) { bestD = dSq; best = e; }
     }
     return best;
   }
@@ -109,7 +109,7 @@ const ShadowCloneManager = {
 
     // LV5 speed bonus
     if (genreLv >= 5) {
-      const n = this.clones.filter(c => c.alive).length;
+      const n = this.activeCount();
       rate = cfg.BASE_FIRE_RATE * (1 + n * cfg.LV5_SHADOW_ASPD_PER_SHADOW);
     }
 
@@ -122,12 +122,23 @@ const ShadowCloneManager = {
     for (let i = this.clones.length - 1; i >= 0; i--) {
       const c = this.clones[i];
       c.update(dt, enemies, state);
-      if (!c.alive) this.clones.splice(i, 1);
+      if (!c.alive) {
+        ShadowLink.forget(c.id); // 释放该暗影的命中记录
+        this.clones.splice(i, 1);
+      }
     }
   },
 
   getActive() {
     return this.clones.filter(c => c.alive);
+  },
+
+  activeCount() {
+    let n = 0;
+    for (let i = 0; i < this.clones.length; i++) {
+      if (this.clones[i].alive) n++;
+    }
+    return n;
   },
 
   clear() { this.clones = []; }
