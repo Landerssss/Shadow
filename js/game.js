@@ -24,8 +24,12 @@ const Game = {
       genreLv:  document.getElementById('hud-genre-lv'),
       bossTimer: document.getElementById('hud-boss-timer'),
       bossWarn:  document.getElementById('hud-boss-warning'),
+      score:     document.getElementById('hud-score'),
       time:      document.getElementById('hud-time'),
     };
+
+    // 连击计数器（pixelfx combo-counter 适配版，独立透明像素画布）
+    if (typeof ComboCounterHUD !== 'undefined') ComboCounterHUD.init();
 
     window.addEventListener('resize', () => {
       Renderer.resize(this.canvas);
@@ -68,16 +72,19 @@ const Game = {
   startEndless() {
     // 默认进入上一局选用的流派；若 state 还在则沿用，否则默认 0
     const lastGenre = (this.state && typeof this.state.genre === 'number') ? this.state.genre : 0;
-    this._startGame(lastGenre, true);
+    // 通关后继续无尽：继承本局得分（重新开始一局仍由 _startGame 归零）
+    const carryScore = (this.state && typeof this.state.score === 'number') ? this.state.score : 0;
+    this._startGame(lastGenre, true, carryScore);
   },
 
-  _startGame(genre, endlessMode) {
+  _startGame(genre, endlessMode, initialScore) {
     this._stopBgCanvas();
     this._hudLast = {};
     // Init state
     this.state = {
       genre,
       genreLv:        1,
+      score:          Math.max(0, initialScore || 0),
       player:         Player,
       enemies:        EnemyManager.enemies,
       time:           0,
@@ -100,6 +107,8 @@ const Game = {
     // 灰烬投手抛投物：开局清空未结算炸弹
     LobberBombs.clear();
     Particles.clear();
+    CombatFeedback.reset();
+    if (typeof ComboCounterHUD !== 'undefined') ComboCounterHUD.reset();
     ShadowCloneManager.clear();
     VortexManager.init();
     DeathShadowManager.clear();
@@ -120,10 +129,8 @@ const Game = {
     RicochetManager.clear();
     // 暗影轨道场视觉状态重置（纯视觉层）
     OrbitField.clear();
-
-    // Update HUD genre name
-    document.getElementById('hud-genre-name').textContent = GENRE_NAMES[genre];
-    document.getElementById('hud-genre-lv').textContent = '1';
+    // 冰封冰壳视觉实例全部销毁（敌人列表已重置）
+    if (typeof IceShell !== 'undefined') IceShell.clear();
 
     // Show game
     this._showScreen(null);
@@ -153,6 +160,8 @@ const Game = {
     RicochetManager.clear();
     LobberBombs.clear(); // 重开时清理未结算炸弹
     OrbitField.clear();
+    if (typeof IceShell !== 'undefined') IceShell.clear();
+    if (typeof ComboCounterHUD !== 'undefined') ComboCounterHUD.reset();
     this._runBgCanvas(); // 回到开始界面时恢复背景动画
   },
 
@@ -163,6 +172,17 @@ const Game = {
     const dt = Math.min((timestamp - this.lastTime) / 1000, 0.05);
     this.lastTime = timestamp;
     const state = this.state;
+
+    // ── 击杀顿帧：真实时间计时，冻结世界 / 冷却 / 计时；UI 与输入继续 ──
+    if (!state.paused) CombatFeedback.tickReal(dt);
+    if (!state.paused && CombatFeedback.hitStopMs > 0) {
+      this._updateHUD();
+      this._render(state);
+      if (state.gameOver) { this._showGameOver(); return; }
+      if (state.gameWin)  { this._showGameWin();  return; }
+      this.animId = requestAnimationFrame(t => this._loop(t));
+      return;
+    }
 
     if (!state.paused) {
       // ── Level-up check (pause game and show cards)
@@ -205,6 +225,8 @@ const Game = {
     state.cam = Renderer.cam;
     EnemyManager.update(dt, player, state);
     state.enemies = EnemyManager.enemies;
+    // 暗影冰封视觉：跟随真实 freezeTimer 驱动 enter / hold / exit，不参与玩法结算
+    if (typeof IceShell !== 'undefined') IceShell.update(dt, state.enemies);
 
     // 每帧只统计一次存活敌人列表（复用缓冲，替代多次 filter 分配）
     const alive = EnemyManager.getAlive();
@@ -254,7 +276,11 @@ const Game = {
 
     // Death shadows
     DeathShadowManager.update(dt, alive, state);
-    ShadowExplosionManager.update(dt);
+    ShadowExplosionManager.update(dt, state);
+
+    // 战斗反馈（闪白衰减 / 形变 / 击退窗口 / 震屏 / 网格波 / 连击超时）
+    // 连击使用游戏时间判定：暂停 / 选卡 / 顿帧时 time 不推进，计时自然冻结。
+    CombatFeedback.update(dt, state.time * 1000);
 
     // Shadow link
     const allShadowEntities = this._getAllShadowEntities(state);
@@ -287,13 +313,13 @@ const Game = {
     const ctx = Renderer.ctx;
     const cam = Renderer.cam;
 
-    // 引雷落地震屏 + 雷霆爆炸震屏（强度 ≤ 0.8 快速衰减；只平移世界层，DOM 伤害数字/HUD 不受影响）
-    const sh = Math.max(SkyThunderManager.shake, ThunderFeedback.shake * 0.5);
+    // 震屏（统一入口：引雷 / 雷霆爆炸 / 战斗反馈共享；总偏移硬上限 2px）
+    const extraPx = Math.max(SkyThunderManager.shake * 4, ThunderFeedback.shake * 2);
+    const sh = CombatFeedback.renderShake(extraPx);
     const shakeOn = sh > 0.001;
     if (shakeOn) {
-      const m = sh * 4;
       ctx.save();
-      ctx.translate((Math.random() * 2 - 1) * m, (Math.random() * 2 - 1) * m);
+      ctx.translate((Math.random() * 2 - 1) * sh, (Math.random() * 2 - 1) * sh);
     }
 
     // Background（整屏不透明填充，替代 clearRect + fillRect 双次全屏操作；多盖 8px 防震出黑边）
@@ -392,12 +418,21 @@ const Game = {
     // 敌方地面预警（冲锋通道 / 落点红圈 / 焦痕；地面层，画在敌人之下）
     Renderer.drawEnemyGroundFx(cam, state.time, EnemyManager.enemies, LobberBombs.bombs);
 
+    // 已死亡敌人的冰壳碎片（后半层先画，前半层在敌人之后画）
+    if (typeof IceShell !== 'undefined') IceShell.drawDetached(ctx, 'back', state.time);
+
+    // 冰壳雪花后半层：只绘制标记为 back 的雪花
+    Renderer.drawParticles(Particles.list, true);
+
     // Enemies
     for (const e of EnemyManager.enemies) {
       if (e.alive && Utils.isOnScreen(e.x, e.y, cam)) {
         Renderer.drawEnemy(e, state.time, state.player);
       }
     }
+
+    // 已死亡敌人的冰壳碎片（前半层）
+    if (typeof IceShell !== 'undefined') IceShell.drawDetached(ctx, 'front', state.time);
 
     // 灰烬投手炸弹（抛物线飞行中的抛投物，实体层）
     for (const b of LobberBombs.bombs) {
@@ -448,8 +483,8 @@ const Game = {
       );
     }
 
-    // Ambient particles
-    Renderer.drawParticles(Particles.list);
+    // Ambient particles（后半层雪花已在敌人之前绘制）
+    Renderer.drawParticles(Particles.list, false);
 
     // 引雷空中层（暗云 / 巨大雷柱 / 分叉 / 落地闪光；加亮绘制不遮挡敌人，反馈低于白蚀爆裂）
     SkyThunderManager.renderSkyThunderStrikes(ctx, cam, state, 'air');
@@ -473,6 +508,16 @@ const Game = {
     if (shakeOn) ctx.restore();
     // Minimap（绘制一次，位于最顶层）
     Renderer.drawMinimap(state);
+
+    // 连击 HUD：用游戏时间驱动，画在独立透明画布上（不受摄像机/震屏影响）
+    if (typeof ComboCounterHUD !== 'undefined') {
+      ComboCounterHUD.tick(
+        state.time * 1000,
+        CombatFeedback.comboCount,
+        CombatFeedback.comboExpiresAt,
+        CombatFeedback.comboChainId
+      );
+    }
   },
 
   // ── HUD ────────────────────────────────────────────────────────────
@@ -530,16 +575,35 @@ const Game = {
       last.time = tStr;
       els.time.textContent = tStr;
     }
+
+    // 本局得分（左上）：千位分隔；分数增加时短促弹动一次（同帧多杀只触发一次）
+    const score = st.score || 0;
+    if (last.score !== score) {
+      const prevScore = last.score;
+      last.score = score;
+      els.score.textContent = score.toLocaleString('en-US');
+      if (prevScore !== undefined && score > prevScore) {
+        els.score.classList.remove('pop');
+        void els.score.offsetWidth;
+        els.score.classList.add('pop');
+        clearTimeout(this._scorePopT);
+        this._scorePopT = setTimeout(() => els.score.classList.remove('pop'), 160);
+      }
+    }
+
+    // 连击（右上）：由 ComboCounterHUD 在 _render 中用真实击杀状态与游戏时间驱动
   },
 
   // ── Game Over ──────────────────────────────────────────────────────
   _showGameOver() {
     this.running = false;
-    // 死亡时清空所有雷区与弹射流状态（不残留到结算界面）
+    // 死亡时清空所有雷区/预约/批次与弹射流状态（不残留到结算界面）
     SkyThunderManager.clearSkyThunderStrikes();
+    PublicLightningManager.clear();
     RicochetManager.clear();
     LobberBombs.clear(); // 游戏死亡时清理未结算炸弹
     OrbitField.clear();
+    if (typeof ComboCounterHUD !== 'undefined') ComboCounterHUD.reset();
     document.getElementById('hud').classList.add('hidden');
     this.canvas.classList.remove('active');
 
@@ -550,6 +614,8 @@ const Game = {
 
     document.getElementById('gameover-stats').innerHTML = `
       <div>存活时间: <span>${m}:${s}</span></div>
+      <div>本局得分: <span>${(st.score || 0).toLocaleString('en-US')}</span></div>
+      <div>击杀数: <span>${p.kills}</span></div>
       <div>达到等级: <span>${p.level}</span></div>
       <div>流派: <span>${GENRE_NAMES_CN[st.genre]} / ${GENRE_NAMES[st.genre]} Lv.${st.genreLv}</span></div>
     `;
@@ -560,11 +626,13 @@ const Game = {
   // ── Game Win ───────────────────────────────────────────────────────
   _showGameWin() {
     this.running = false;
-    // 通关时清空所有雷区与弹射流状态
+    // 通关时清空所有雷区/预约/批次与弹射流状态
     SkyThunderManager.clearSkyThunderStrikes();
+    PublicLightningManager.clear();
     RicochetManager.clear();
     LobberBombs.clear(); // 通关时清理未结算炸弹
     OrbitField.clear();
+    if (typeof ComboCounterHUD !== 'undefined') ComboCounterHUD.reset();
     document.getElementById('hud').classList.add('hidden');
     this.canvas.classList.remove('active');
 
@@ -575,6 +643,8 @@ const Game = {
 
     document.getElementById('win-stats').innerHTML = `
       <div>通关时间: <span>${m}:${s}</span></div>
+      <div>本局得分: <span>${(st.score || 0).toLocaleString('en-US')}</span></div>
+      <div>击杀数: <span>${p.kills}</span></div>
       <div>达到等级: <span>${p.level}</span></div>
       <div>流派: <span>${GENRE_NAMES_CN[st.genre]} / ${GENRE_NAMES[st.genre]} Lv.${st.genreLv}</span></div>
       <div>击杀 BOSS: <span>${EnemyManager._defeatedBossCount || 0}</span></div>

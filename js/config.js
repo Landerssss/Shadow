@@ -85,6 +85,18 @@ const CONFIG = {
     },
   },
 
+  // ── 击杀得分：固定基础分，不随等级 / 时间成长 / 无尽 BUFF / 连击变化 ──
+  ENEMY_SCORE: {
+    melee:   10,
+    shooter: 15,
+    wave:    20,
+    charger: 25,
+    lobber:  30,
+    bulwark: 35,
+    healer:  40,
+    boss:    500,
+  },
+
   // ── 新普通敌人（charger / bulwark / lobber）行为与生成参数 ──────────────
   // 所有首轮测试基线集中在此，行为与渲染代码不得散落硬编码数值。
   NEW_ENEMY: {

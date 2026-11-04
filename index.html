@@ -131,8 +131,11 @@
         <div id="exp-bar" class="exp-bar"></div>
         <span id="exp-text" class="exp-text">0 / 100</span>
       </div>
+      <div class="hud-score">得分 <b id="hud-score">0</b></div>
     </div>
     <div class="hud-right">
+      <!-- 连击计数器：pixelfx ui/combo-counter 适配版（arcane 色板，真实三秒续接） -->
+      <canvas id="hud-combo-canvas" class="hud-combo-canvas" width="232" height="72"></canvas>
       <div class="hud-info">
         <span class="hud-genre-name" id="hud-genre-name">Shadow Echo</span>
         <span class="hud-genre-lv">Lv.<span id="hud-genre-lv">1</span></span>
@@ -146,8 +149,11 @@
 
   <script src="js/utils.js"></script>
   <script src="js/config.js"></script>
+  <script src="js/iceshell.js"></script>
   <script src="js/renderer.js"></script>
   <script src="js/particles.js"></script>
+  <script src="js/feedback.js"></script>
+  <script src="js/combocounter.js"></script>
   <script src="js/bullet.js"></script>
   <script src="js/shadow.js"></script>
   <script src="js/vortex.js"></script>

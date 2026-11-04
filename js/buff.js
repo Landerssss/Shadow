@@ -55,14 +55,14 @@ const BUFFS = [
   {
     id:    'shadow_link',
     icon:  '🔗',
-    title: '暗影连线',
+    title: '连线',
     desc:  '玩家与每个暗影实体间生成连线，敌人经过时受到伤害。',
     type:  'buff',
     oneTime: true,
     // 默认金色（无 mechColor）
     descFn(state) {
       if (state.genre === 4) {
-        return '玩家与最近的3个有效弹球间生成暗影连线：敌人穿过受20伤害（同球同敌1秒限频），连线伤害不触发弹球碰撞、不消耗雷霆碰撞预算；蓄能球环绕时连线暂隐。';
+        return '玩家与最近的3个有效弹球间生成连线：敌人穿过受20伤害（同球同敌1秒限频），连线伤害不触发弹球碰撞、不消耗雷霆碰撞预算；蓄能球环绕时连线暂隐。';
       }
       if (state.genre === 3) {
         return '因果节点之间生成因果连线（最多3个）：事件沿连线传播，三个节点闭合时触发白蚀爆裂。';
@@ -77,7 +77,7 @@ const BUFFS = [
   {
     id:    'buff_hp',
     icon:  '❤️',
-    title: '暗影躯体',
+    title: '躯体',
     desc:  '玩家最大血量提高5%。',
     type:  'buff',
     descFn(state) {
@@ -96,7 +96,7 @@ const BUFFS = [
   {
     id:    'buff_dmg',
     icon:  '⚡',
-    title: '暗影力量',
+    title: '力量',
     desc:  '玩家伤害提高5%。',
     type:  'buff',
     descFn(state) {
@@ -112,7 +112,7 @@ const BUFFS = [
   {
     id:    'buff_aspd',
     icon:  '💨',
-    title: '暗影疾行',
+    title: '疾行',
     desc:  '玩家攻击速度提高10%。',
     type:  'buff',
     descFn(state) {
@@ -128,7 +128,7 @@ const BUFFS = [
   {
     id:    'buff_def',
     icon:  '🛡️',
-    title: '暗影护盾',
+    title: '金刚不坏',
     desc:  '受到伤害减少5%。',
     type:  'buff',
     unlockLevel: 4,
@@ -142,7 +142,7 @@ const BUFFS = [
   {
     id:    'buff_lifesteal',
     icon:  '🩸',
-    title: '暗影汲取',
+    title: '汲取',
     desc:  '击杀敌人时回复5%最大生命。',
     type:  'buff',
     unlockLevel: 4,
@@ -159,7 +159,7 @@ const BUFFS = [
   {
     id:    'buff_shotgun',
     icon:  '✦',
-    title: '暗影散弹',
+    title: '霰弹',
     desc:  '攻击模式变为散弹',
     type:  'buff',
     oneTime: true,
@@ -174,7 +174,7 @@ const BUFFS = [
   {
     id:    'buff_servitude',
     icon:  '⛓️',
-    title: '暗影奴役',
+    title: '奴役',
     desc:  '怪物 1/2/3 移动速度加快，血量降低25%。',
     type:  'buff',
     oneTime: true,
@@ -187,7 +187,7 @@ const BUFFS = [
   {
     id:    'buff_shadow_energy',
     icon:  '💎',
-    title: '暗影能源',
+    title: '能源',
     desc:  '每隔5秒回复15%最大血量。',
     type:  'buff',
     oneTime: true,
@@ -202,7 +202,7 @@ const BUFFS = [
   {
     id:    'buff_overlord',
     icon:  '👑',
-    title: '暗影君王',
+    title: '君王',
     desc:  '每杀死一个怪物，基础攻击+1。',
     type:  'buff',
     oneTime: true,
@@ -212,7 +212,7 @@ const BUFFS = [
   {
     id:    'buff_speed',
     icon:  '👟',
-    title: '暗影疾步',
+    title: '疾步',
     desc:  '玩家移动速度提升。',
     type:  'buff',
     descFn(state) {
@@ -228,7 +228,7 @@ const BUFFS = [
   {
     id:    'buff_crit',
     icon:  '🎯',
-    title: '暗影洞察',
+    title: '洞察',
     desc:  '因果残响/不灭的暗影流派：暴击率提高；其他流派：伤害提高。',
     type:  'buff',
     unlockLevel: 4,
@@ -249,7 +249,7 @@ const BUFFS = [
   {
     id:    'buff_freeze',
     icon:  '❄️',
-    title: '暗影冰封',
+    title: '冰封',
     desc:  '怪物受三次攻击后，在十秒内移速降低90%。',
     type:  'buff',
     oneTime: true,
@@ -271,7 +271,7 @@ const BUFFS = [
   {
     id:    'buff_pierce',
     icon:  '➹',
-    title: '暗影贯穿',
+    title: '贯穿',
     desc:  '子弹可额外穿透1个敌人，穿透后伤害降低35%。',
     type:  'buff',
     oneTime: true,
@@ -289,7 +289,7 @@ const BUFFS = [
   {
     id:    'buff_range',
     icon:  '◎',
-    title: '暗影领域',
+    title: '领域',
     desc:  '技能范围提高12%。',
     type:  'buff',
     oneTime: true,
@@ -299,7 +299,7 @@ const BUFFS = [
         return '技能范围提高12%：雷霆爆炸、电磁场、磁极残核接触范围与导电电弧半径增大（不放大回弹边界与弹球）。';
       }
       return state.genre === 3
-        ? '技能范围提高12%：白蚀爆裂、冰裂、公共爆炸的半径增大。'
+        ? '技能范围提高12%：白蚀爆裂、冰裂、爆炸的半径增大。'
         : '技能范围提高12%（范围类效果半径增大）。';
     },
     apply(state) { state.player.applyRangeBuff(0.12); }
@@ -307,7 +307,7 @@ const BUFFS = [
   {
     id:    'buff_mech_cd',
     icon:  '⏲',
-    title: '暗影律动',
+    title: '律动',
     desc:  '公共机制冷却缩减12%。',
     type:  'buff',
     oneTime: true,
@@ -325,7 +325,7 @@ const BUFFS = [
   {
     id:    'pub_blast',
     icon:  '💥',
-    title: '公共爆炸',
+    title: '爆炸',
     desc:  '敌人死亡时产生小范围爆炸，对周围敌人造成伤害。',
     type:  'buff',
     oneTime: true,
@@ -373,18 +373,18 @@ const GENRE_CARDS = {
       apply(state) { state.genreLv = 3; }
     },
     {
-      id: 'echo_lv4', icon: '🔥', title: '暗影锋芒 Lv.4',
+      id: 'echo_lv4', icon: '🔥', title: '锋芒 Lv.4',
       desc: '暗影伤害提升40%。', type: 'genre',
       apply(state) { state.genreLv = 4; }
     },
     {
-      id: 'echo_lv5', icon: '✨', title: '共鸣风暴 Lv.5',
+      id: 'echo_lv5', icon: '✨', title: '共鸣 Lv.5',
       desc: '每个存活暗影使主角攻速+15%，暗影攻速+10%。', type: 'genre',
       apply(state) { state.genreLv = 5; }
     },
     {
-      id: 'echo_lv6', icon: '💥', title: '暗影爆破 Lv.6',
-      desc: '暗影消失和敌人死后会产生暗影爆炸。', type: 'genre',
+      id: 'echo_lv6', icon: '💥', title: '冲击 Lv.6',
+      desc: '暗影消散和敌人死后会引发暗影冲击，击杀可继续连锁（最多 2 代）。', type: 'genre',
       apply(state) { state.genreLv = 6; }
     },
   ],
@@ -413,12 +413,12 @@ const GENRE_CARDS = {
       apply(state) { state.genreLv = 5; }
     },
     {
-      id: 'vortex_lv6', icon: '🌀', title: '暗影裂隙 Lv.6',
+      id: 'vortex_lv6', icon: '🌀', title: '裂隙 Lv.6',
       desc: '两个漩涡相交时生成暗影裂隙，分 3 次朝敌群密集方向发射激光。', type: 'genre',
       apply(state) { state.genreLv = 6; }
     },
     {
-      id: 'vortex_lv7', icon: '🌑', title: '裂隙融合 Lv.7',
+      id: 'vortex_lv7', icon: '🌑', title: '融合 Lv.7',
       desc: '两个相交的漩涡在裂隙三次激光都结束后融合成 1.5 倍大的漩涡。', type: 'genre',
       apply(state) { state.genreLv = 7; }
     },
@@ -428,13 +428,13 @@ const GENRE_CARDS = {
   2: [
     null, // lv1 = starting level, no card（初始即拥有护壳/汲取/余烬/主冲击）
     {
-      id: 'undying_lv2', icon: '🩸', title: '饥渴余烬 Lv.2',
+      id: 'undying_lv2', icon: '🩸', title: '余烬 Lv.2',
       desc: '余烬与遗蜕的自动收集范围+40%，余烬和遗蜕提供的恢复量+25%。',
       type: 'genre',
       apply(state) { state.genreLv = 2; }
     },
     {
-      id: 'undying_lv3', icon: '🛡️', title: '蚀影增殖 Lv.3',
+      id: 'undying_lv3', icon: '🛡️', title: '蚀影 Lv.3',
       desc: '护壳容量从最大生命的30%提升到45%；实际恢复转护壳比例从50%提升到75%。',
       type: 'genre',
       apply(state) { state.genreLv = 3; }
@@ -458,7 +458,7 @@ const GENRE_CARDS = {
       apply(state) { state.genreLv = 6; }
     },
     {
-      id: 'undying_lv7', icon: '✦', title: '不灭盛宴 Lv.7',
+      id: 'undying_lv7', icon: '✦', title: '盛宴 Lv.7',
       desc: '一次主冲击及余波收集至少3份余烬资源后进入盛宴4秒：恢复转护壳+25%，主冲击额外释放4道尖瓣裂光（25%伤害）。',
       type: 'genre',
       apply(state) { state.genreLv = 7; }
@@ -469,37 +469,37 @@ const GENRE_CARDS = {
   3: [
     null, // lv1 = starting level, no card
     {
-      id: 'causal_lv2', icon: '⏳', title: '残响留痕 Lv.2',
+      id: 'causal_lv2', icon: '⏳', title: '留痕 Lv.2',
       desc: '命中后有25%概率在命中位置生成因果节点：450ms后弱化复现该次攻击，并等待后续事件进入（记录事件标签，累积反应）。',
       type: 'genre',
       apply(state) { state.genreLv = 2; }
     },
     {
-      id: 'causal_lv3', icon: '🎭', title: '双重回放 Lv.3',
+      id: 'causal_lv3', icon: '🎭', title: '回放 Lv.3',
       desc: '一个节点可同时记录两个不同事件标签，双标签组合（HIT+CRIT、HIT+FREEZE、HIT+LINK 等）触发强化脉冲。',
       type: 'genre',
       apply(state) { state.genreLv = 3; }
     },
     {
-      id: 'causal_lv4', icon: '🔮', title: '机制复现 Lv.4',
+      id: 'causal_lv4', icon: '🔮', title: '复现 Lv.4',
       desc: '公共机制在流派3中生成对应类型的因果节点：冰封→冰封节点（冰裂）、爆炸→爆裂节点、闪电→闪电节点、连线→因果连线、死亡阴影→死亡回响节点。',
       type: 'genre',
       apply(state) { state.genreLv = 4; }
     },
     {
-      id: 'causal_lv5', icon: '🔄', title: '因果转化 Lv.5',
+      id: 'causal_lv5', icon: '🔄', title: '转化 Lv.5',
       desc: '根据两个事件标签的组合决定转化结果：HIT+FREEZE→冰裂、LINK+LINK→长链、EXPLOSION+HIT→碎片爆发、DEATH_SHADOW+HIT→死亡节点提前临界。',
       type: 'genre',
       apply(state) { state.genreLv = 5; }
     },
     {
-      id: 'causal_lv6', icon: '🔗', title: '连锁回声 Lv.6',
+      id: 'causal_lv6', icon: '🔗', title: '回声 Lv.6',
       desc: '白蚀爆裂影响至少3个敌人后，下一条因果链触发速度提高（连锁等级最多3层，4秒无新反应后清空）。',
       type: 'genre',
       apply(state) { state.genreLv = 6; }
     },
     {
-      id: 'causal_lv7', icon: '💫', title: '残响崩解 Lv.7',
+      id: 'causal_lv7', icon: '💫', title: '崩解 Lv.7',
       desc: '节点完成反应后留下裂口残留（约500ms），向附近目标传播一次弱化 RUPTURE；死亡回响节点可继承死者最近的公共机制标签。',
       type: 'genre',
       apply(state) { state.genreLv = 7; }
@@ -510,37 +510,37 @@ const GENRE_CARDS = {
   4: [
     null, // lv1 = starting level, no card（开局即有弹球 + 蓄能回弹基础机制）
     {
-      id: 'ricochet_lv2', icon: '🔮', title: '快速蓄能 Lv.2',
+      id: 'ricochet_lv2', icon: '🔮', title: '蓄能 Lv.2',
       desc: '蓄能间隔4.5秒→3.8秒，召回时间550ms→480ms；弹球上限3→4、半径16→18的等级成长保持，不新增球数。',
       type: 'genre',
       apply(state) { state.genreLv = 2; }
     },
     {
-      id: 'ricochet_lv3', icon: '⚡', title: '磁轨校准 Lv.3',
+      id: 'ricochet_lv3', icon: '⚡', title: '磁轨 Lv.3',
       desc: '蓄能球发射速度+15%（1.1→1.15倍），自动瞄准最大偏转角≤18°；首次有效碰撞产生一次小型方向脉冲（36px、20%伤害）。',
       type: 'genre',
       apply(state) { state.genreLv = 3; }
     },
     {
-      id: 'ricochet_lv4', icon: '🎯', title: '过载电弧 Lv.4',
+      id: 'ricochet_lv4', icon: '🎯', title: '过载 Lv.4',
       desc: '弹球上限4→5的等级成长保持；蓄能球首次有效命中后进入过载2秒：之后每次有效碰撞放出短电弧（25%伤害、80~100ms麻痹），最多3次，不递归。',
       type: 'genre',
       apply(state) { state.genreLv = 4; }
     },
     {
-      id: 'ricochet_lv5', icon: '❄️', title: '磁场回流 Lv.5',
+      id: 'ricochet_lv5', icon: '❄️', title: '回流 Lv.5',
       desc: '蓄能球有效碰撞位置生成短暂磁场（58px、0.7秒、每0.35秒12%伤害）；普通弹球进入获得导电2秒（2次碰撞，伤害+25%、麻痹100ms）。',
       type: 'genre',
       apply(state) { state.genreLv = 5; }
     },
     {
-      id: 'ricochet_lv6', icon: '💥', title: '雷核觉醒 Lv.6',
+      id: 'ricochet_lv6', icon: '💥', title: '雷核 Lv.6',
       desc: '蓄能球升级为雷核：速度×1.8（上限1100），碰撞附带120ms麻痹，最多14次有效碰撞或2.6秒后结束，结束时放出小型电弧（30%伤害）。',
       type: 'genre',
       apply(state) { state.genreLv = 6; }
     },
     {
-      id: 'ricochet_lv7', icon: '🌀', title: '雷霆闪电球 Lv.7',
+      id: 'ricochet_lv7', icon: '🌀', title: '迅雷 Lv.7',
       desc: '蓄能球升级为雷霆闪电球：速度×2.1（上限1250）、碰撞伤害×1.2并麻痹160ms；24次有效碰撞或2.8秒后爆炸（1.5倍伤害），生成125px电磁场2.4秒（每0.35秒18%伤害）强化普通弹球。',
       type: 'genre',
       apply(state) { state.genreLv = 7; }

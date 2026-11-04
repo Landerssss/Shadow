@@ -79,6 +79,7 @@ const Player = {
     this.expToNext = CONFIG.EXP_PER_LEVEL_BASE;
     this.kills    = 0;
     this.totalDmg = 0;
+    this._recoil  = null;
     // 无尽模式：BUFF 加成倍率（>1 时所有 apply*Buff 的数值乘以此值）
     this._endlessMult = (opts && opts.endlessBuffMult) ? opts.endlessBuffMult : 1;
   },
@@ -118,6 +119,8 @@ const Player = {
     if (this.invincibleTimer > 0) this.invincibleTimer -= dt;
     if (this.muzzleFlash > 0)    this.muzzleFlash -= dt * 4;
     if (this.hitFlash > 0)       this.hitFlash -= dt;
+    // 开火后坐恢复（仅渲染偏移）
+    if (this._recoil && this._recoil.t > 0) this._recoil.t -= dt;
     // 暗影能源：每 5s 回复 15% 最大血量（走统一恢复入口；满血仍有溢出恢复 → 护壳）
     if (this.shadowEnergy) {
       this.shadowEnergyTimer -= dt;
@@ -220,6 +223,8 @@ const Player = {
         if (sb2) { if (this.bulletPierce > 0) sb2.pierce = this.bulletPierce; sb2.batchId = batchId; }
       }
       this.muzzleFlash = 1;
+      // 开火后坐（散弹按一次开火计一次）
+      if (typeof CombatFeedback !== 'undefined') CombatFeedback.onPlayerFire(this);
     }
   },
 

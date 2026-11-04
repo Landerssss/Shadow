@@ -265,6 +265,33 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
 .hud.hidden { display: none; }
 .hud-left { display: flex; flex-direction: column; gap: 8px; min-width: 260px; }
 .hud-level { font-size: 1.5rem; font-weight: 800; color: var(--purple); letter-spacing: 1px; }
+/* 本局得分（左上，等级/经验条下方） */
+.hud-score {
+  display: flex; align-items: baseline; gap: 7px;
+  font-size: .98rem; font-weight: 700; color: #b79cff;
+  letter-spacing: .5px; white-space: nowrap;
+}
+.hud-score b {
+  display: inline-block;
+  font-size: 1.55rem; color: #ffffff;
+  text-shadow: 0 1px 0 #1a0b2e, 0 0 10px rgba(157, 104, 255, .9);
+  font-variant-numeric: tabular-nums;
+  transform-origin: left center;
+}
+.hud-score b.pop { animation: hud-score-pop 140ms ease-out; }
+@keyframes hud-score-pop {
+  0%   { transform: scale(1);    filter: brightness(1); }
+  35%  { transform: scale(1.12); filter: brightness(1.35); }
+  100% { transform: scale(1);    filter: brightness(1); }
+}
+/* 连击计数器（右上，pixelfx 像素特效画布） */
+.hud-combo-canvas {
+  display: block;
+  width: 232px; height: 72px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  pointer-events: none;
+}
 
 /* BOSS 倒计时（屏幕最上方） */
 .hud-boss-timer {
@@ -353,6 +380,7 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
 .hud-genre-lv { font-size: .8rem; color: var(--textDim); }
 .hud-time { font-size: .85rem; color: var(--textDim); font-variant-numeric: tabular-nums; }
 
+
 /* ─── CANVAS ─── */
 #game-canvas {
   position: fixed; inset: 0; width: 100vw; height: 100vh;
@@ -362,15 +390,27 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
 
 /* ─── DAMAGE NUMBERS ─── */
 .dmg-num {
-  position: fixed; pointer-events: none; font-size: .85rem; font-weight: 700;
-  color: #fff; text-shadow: 0 0 6px #000; z-index: 6;
-  /* 上浮动画由 js/utils.js 通过 WAAPI 驱动（关键帧同 @keyframes floatUp），
-     复用 DOM 节点 + 合成器动画，避免频繁创建/销毁节点引发卡顿 */
+  position: fixed; pointer-events: none; font-size: .9rem; font-weight: 800;
+  color: #f4f0ff;
+  /* 普通伤害：白色/冷白 + 深紫黑描边 */
+  text-shadow: 0 0 4px rgba(0,0,0,.9), 0 0 3px #1a0030, 0 1px 0 #000;
+  z-index: 6;
+  font-variant-numeric: tabular-nums;
+  will-change: transform, opacity;
+  /* 上浮动画由 js/utils.js 通过 WAAPI 驱动（对象池复用节点，避免频繁创建/销毁） */
   opacity: 0;
 }
-.dmg-num.crit { color: #ffcc00; font-size: 1.1rem; }
+/* 暴击：红/橙 + 感叹号，约 1.5 倍字号（感叹号由脚本追加） */
+.dmg-num.crit {
+  color: #ff5a3c; font-size: 1.35rem;
+  text-shadow: 0 0 10px #ff2030, 0 0 3px #2a0010, 0 1px 0 #000;
+}
 .dmg-num.heal { color: #00ffaa; }
-.dmg-num.boss { color: #ff3c3c; font-size: 1.4rem; text-shadow: 0 0 10px #ff2030; }
+/* BOSS 共享池：保留红色大数字 */
+.dmg-num.boss {
+  color: #ff3c3c; font-size: 1.4rem;
+  text-shadow: 0 0 10px #ff2030, 0 1px 0 #000;
+}
 @keyframes floatUp {
   0%   { opacity: 1; transform: translateY(0) scale(1); }
   100% { opacity: 0; transform: translateY(-40px) scale(.8); }

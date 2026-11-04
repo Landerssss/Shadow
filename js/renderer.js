@@ -116,17 +116,43 @@ const Renderer = {
       }
     }
 
-    // Subtle grid lines（合并为一次 stroke）
+    // Subtle grid lines（合并为一次 stroke；有冲击波时按段扭曲）
     ctx.strokeStyle = '#1a0840';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
-    for (let wx = startX; wx < endX; wx += tileSize) {
-      const sx = wx + ox;
-      ctx.moveTo(sx, 0); ctx.lineTo(sx, cam.sh);
-    }
-    for (let wy = startY; wy < endY; wy += tileSize) {
-      const sy = wy + oy;
-      ctx.moveTo(0, sy); ctx.lineTo(cam.sw, sy);
+    if (typeof CombatFeedback !== 'undefined' && CombatFeedback.gridWaves.length > 0) {
+      const gcfg = (typeof COMBAT_FX !== 'undefined') ? COMBAT_FX.grid : { segPx: 32 };
+      const seg = gcfg.segPx || 32;
+      const band = seg;
+      for (let wx = startX; wx < endX; wx += tileSize) {
+        const sx = wx + ox;
+        for (let wy = startY; wy < endY; wy += seg) {
+          const sy = wy + oy;
+          const o1 = CombatFeedback.gridOffset(wx, wy);
+          const o2 = CombatFeedback.gridOffset(wx, wy + band);
+          ctx.moveTo(sx + (o1 ? o1.x : 0), sy + (o1 ? o1.y : 0));
+          ctx.lineTo(sx + (o2 ? o2.x : 0), sy + band + (o2 ? o2.y : 0));
+        }
+      }
+      for (let wy = startY; wy < endY; wy += tileSize) {
+        const sy = wy + oy;
+        for (let wx = startX; wx < endX; wx += seg) {
+          const sx = wx + ox;
+          const o1 = CombatFeedback.gridOffset(wx, wy);
+          const o2 = CombatFeedback.gridOffset(wx + band, wy);
+          ctx.moveTo(sx + (o1 ? o1.x : 0), sy + (o1 ? o1.y : 0));
+          ctx.lineTo(sx + band + (o2 ? o2.x : 0), sy + (o2 ? o2.y : 0));
+        }
+      }
+    } else {
+      for (let wx = startX; wx < endX; wx += tileSize) {
+        const sx = wx + ox;
+        ctx.moveTo(sx, 0); ctx.lineTo(sx, cam.sh);
+      }
+      for (let wy = startY; wy < endY; wy += tileSize) {
+        const sy = wy + oy;
+        ctx.moveTo(0, sy); ctx.lineTo(cam.sw, sy);
+      }
     }
     ctx.stroke();
 
@@ -207,8 +233,14 @@ const Renderer = {
   drawPlayer(player, time) {
     const ctx = this.ctx;
     const s = Utils.worldToScreen(player.x, player.y, this.cam);
-    const sx = Math.round(s.x);
-    const sy = Math.round(s.y);
+    let sx = Math.round(s.x);
+    let sy = Math.round(s.y);
+    // 开火后坐：渲染位置沿开火反方向偏移（不移动本体/碰撞）
+    if (player._recoil && player._recoil.t > 0) {
+      const k = Math.max(0, player._recoil.t / player._recoil.dur);
+      sx += player._recoil.dx * player._recoil.px * k;
+      sy += player._recoil.dy * player._recoil.px * k;
+    }
     const facing = player.facing; // angle
     const bob = Math.sin(time * 6) * 2;
     const r = CONFIG.PLAYER_RADIUS;
@@ -359,6 +391,37 @@ const Renderer = {
 
   // ── ENEMY ─────────────────────────────────────────────────────────
   drawEnemy(enemy, time, player) {
+    // 冰壳后半：画在怪物身体之后
+    if (typeof IceShell !== 'undefined') IceShell.drawBack(this.ctx, enemy, time);
+    // 挤压拉伸（沿攻击方向缩、垂直方向胀，仅渲染不改碰撞）
+    const sq = enemy._squash;
+    if (sq && sq.t > 0) {
+      const s = Utils.worldToScreen(enemy.x, enemy.y, this.cam);
+      const cx = Math.round(s.x);
+      const cy = Math.round(s.y);
+      const k = Math.max(0, sq.t / sq.dur);
+      const ang = Math.atan2(sq.dy || 0, sq.dx || 0);
+      const along = 1 + (sq.along - 1) * k;
+      const perp  = 1 + (sq.perp - 1) * k;
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(ang);
+      ctx.scale(along, perp);
+      ctx.rotate(-ang);
+      ctx.translate(-cx, -cy);
+      this._drawEnemyBody(enemy, time, player);
+      ctx.restore();
+    } else {
+      this._drawEnemyBody(enemy, time, player);
+    }
+    // 受击闪白（统一在屏幕坐标绘制，覆盖所有怪物类型）
+    this._drawEnemyFlash(enemy);
+    // 冰壳前半：画在怪物身体之前，形成前后包裹
+    if (typeof IceShell !== 'undefined') IceShell.drawFront(this.ctx, enemy, time);
+  },
+
+  _drawEnemyBody(enemy, time, player) {
     const t = enemy.type || 'melee';
     if (t === 'shooter') { this._drawShooter(enemy, time, player); }
     else if (t === 'wave')    { this._drawWaveEm(enemy, time); }
@@ -368,8 +431,21 @@ const Renderer = {
     else if (t === 'lobber')  { this._drawLobber(enemy, time, player); }
     else if (t === 'boss')    { this._drawBoss(enemy, time); }
     else                      { this._drawMelee(enemy, time); }
-    // 暗影冰封玻璃罩（叠加在任意怪物外）
-    if (enemy.freezeTimer > 0) this._drawIceBlock(enemy);
+  },
+
+  _drawEnemyFlash(enemy) {
+    if (!(enemy.flashTimer > 0) || !(enemy.flashDur > 0)) return;
+    const a = Math.max(0, enemy.flashTimer / enemy.flashDur) * (enemy.flashAlpha || 0.55);
+    if (a <= 0.01) return;
+    const ctx = this.ctx;
+    const s = Utils.worldToScreen(enemy.x, enemy.y, this.cam);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, (enemy.radius || 14) * 1.02, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   },
 
   // 怪物1：近战红眼怪
@@ -1495,16 +1571,8 @@ const Renderer = {
     ctx.fillRect(-r, -r - 10, r * 2 * hpPct, 5);
   },
 
-  // 受击红闪（在子方法 restore 之前调用）
-  _drawHitFlash(enemy, r) {
-    if (enemy.hitTimer > 0) {
-      const a = Math.min(1, enemy.hitTimer / 0.12) * 0.7;
-      this.ctx.fillStyle = `rgba(255,40,40,${a})`;
-      this.ctx.beginPath();
-      this.ctx.arc(0, 0, r * 1.05, 0, Math.PI * 2);
-      this.ctx.fill();
-    }
-  },
+  // 受击闪白（统一由 drawEnemy 在屏幕坐标绘制；子方法内的调用保留为空实现）
+  _drawHitFlash(enemy, r) {},
 
   // ── SHADOW CLONE (Echo) ──────────────────────────────────────────
   drawShadowClone(shadow, time) {
@@ -2255,41 +2323,94 @@ const Renderer = {
     }
   },
 
-  // ── SHADOW EXPLOSIONS (Echo LV6) ──────────────────────────────────
+  // ── SHADOW SHOCKWAVE（暗影冲击 · 流派 0 Lv.6）────────────────────────
+  // 完整连续的暗紫圆环 + 内侧细亮边 + 外侧柔和光晕；中央透明，
+  // 波前与 e.radius 对齐，扩散后快速淡出。不使用白色实心圆/断裂环/尖角碎光。
   drawShadowExplosions(explosions, cam) {
     const ctx = this.ctx;
+    const sw = (typeof COMBAT_FX !== 'undefined') ? COMBAT_FX.shockwave : null;
+    const mainColor = (sw && sw.mainColor) || '#AE7BFF';
+    const edgeColor = (sw && sw.edgeColor) || '#D5B9FF';
+    const glowColor = (sw && sw.glowColor) || '#7040B0';
     for (const e of explosions) {
       const s = Utils.worldToScreen(e.x, e.y, cam);
-      const a = Math.min(1, e.life / e.maxLife);
+      const lifeK = Math.max(0, e.life / e.maxLife); // 1 → 0
+      const t = 1 - lifeK;
+      const R = Math.max(2, e.radius);
       const sx = Math.round(s.x);
       const sy = Math.round(s.y);
-      const r = Math.max(2, Math.round(e.radius));
-      // 闪光进度（生命前 25% 强闪光，后 75% 持续 60% 透明扩散）
-      const flashT = 1 - Math.min(1, e.life / (e.maxLife * 0.25));
-      ctx.save();
-      // ── 闪光效果：起始帧强烈的全屏白色瞬间闪光（最大 0.9 alpha 中心 + 渐变外圈）──
-      const flashAlpha = (1 - flashT) * 0.9; // 起始 0.9 → 0
-      if (flashAlpha > 0.01) {
-        const flashR = r * (2 + flashT * 1.5); // 起始最大 r*3.5 → r*2
-        this._drawGlow(sx, sy, flashR, '#ffffff', flashAlpha);
+
+      // 公共爆炸：橙色碎焰环（与暗影冲击的紫色区分）
+      if (e.kind === 'public') {
+        ctx.save();
+        ctx.globalAlpha = 0.75 * lifeK;
+        ctx.strokeStyle = '#ff9a3c';
+        ctx.lineWidth = 4 * (1 - t * 0.5);
+        ctx.beginPath();
+        ctx.arc(sx, sy, R, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 0.5 * lifeK;
+        this._drawGlow(sx, sy, R * 1.3, '#ff7a2a', 0.6);
+        ctx.restore();
+        continue;
       }
-      // ── 白色实心圆（半径 ×2，60% 透明度）──
-      this._drawGlow(sx, sy, r * 2.4, '#ffffff', 0.6 * a);
-      ctx.globalAlpha = 0.6 * a;
-      ctx.fillStyle = '#ffffff';
+
+      // 扩散进度（0 → 1）；扩散结束后进入快速淡出，不在最大半径停留
+      const elapsed = e.maxLife - e.life;
+      const expand = e.expand || ((sw && sw.expandMs) ? sw.expandMs / 1000 : 0.25);
+      const ek = Math.min(1, Math.max(0, elapsed / expand));
+      const tailDur = Math.max(0.001, e.maxLife - expand);
+      const tail = Math.max(0, Math.min(1, (e.maxLife - elapsed) / tailDur));
+      const alpha = tail * tail;
+      if (alpha <= 0.002) continue;
+
+      ctx.save();
+      ctx.lineCap = 'round';
+
+      // 外侧柔和光晕（宽而淡，只沿环带，不填充中心）
+      const lineW = Utils.lerp(6, 2, ek);
+      ctx.globalAlpha = 0.16 * alpha;
+      ctx.strokeStyle = glowColor;
+      ctx.lineWidth = lineW * 3.4;
       ctx.beginPath();
-      ctx.arc(sx, sy, r * 2, 0, Math.PI * 2);
-      ctx.fill();
-      // 外层更亮的白色冲击环（半径 ×2.3）
-      ctx.globalAlpha = 0.8 * a;
+      ctx.arc(sx, sy, R, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // 主环：完整连续圆形
+      ctx.globalAlpha = 0.92 * alpha;
+      ctx.strokeStyle = mainColor;
+      ctx.lineWidth = lineW;
       ctx.beginPath();
-      ctx.arc(sx, sy, r * 2.3, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-      ctx.lineWidth = 16;
+      ctx.arc(sx, sy, R, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 6;
+
+      // 内侧细亮边
+      ctx.globalAlpha = 0.8 * alpha;
+      ctx.strokeStyle = edgeColor;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.max(2, R - 1.4), 0, Math.PI * 2);
       ctx.stroke();
+
+      // 伴随环：很近、低透明度，增加层次但不形成新的波纹
+      ctx.globalAlpha = 0.2 * alpha;
+      ctx.strokeStyle = mainColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.max(2, R * 0.94), 0, Math.PI * 2);
+      ctx.stroke();
+
+      // 极少量淡紫高光（固定角度，不旋转、不构成符文）
+      ctx.globalAlpha = 0.38 * alpha;
+      ctx.strokeStyle = '#E8D8FF';
+      ctx.lineWidth = 1.4;
+      for (let i = 0; i < 2; i++) {
+        const a0 = -Math.PI * 0.5 + i * Math.PI;
+        ctx.beginPath();
+        ctx.arc(sx, sy, Math.max(2, R - 0.6), a0 - 0.16, a0 + 0.16);
+        ctx.stroke();
+      }
+
       ctx.restore();
     }
   },
@@ -2694,7 +2815,47 @@ const Renderer = {
   },
 
   // ── PARTICLES ─────────────────────────────────────────────────────
-  drawParticles(particles) {
+  // 冰壳雪花：六臂/四向晶花，1px 冷青轮廓，少量冷白心点。
+  _drawSnowflake(ctx, x, y, r, rot, color, arms, branch, seed) {
+    const cx = Math.round(x);
+    const cy = Math.round(y);
+    const rr = Math.max(2, Math.round(r));
+    const n = arms === 4 ? 4 : 6;
+    const step = (Math.PI * 2) / n;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1;
+    ctx.lineCap = 'butt';
+    for (let k = 0; k < n; k++) {
+      const a = rot + k * step;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const ex = cx + Math.round(ca * rr);
+      const ey = cy + Math.round(sa * rr);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+
+      if (rr >= 3 && branch > 0) {
+        const bx = cx + Math.round(ca * rr * 0.58);
+        const by = cy + Math.round(sa * rr * 0.58);
+        const bl = Math.max(1, Math.round(rr * branch));
+        const side = (n === 6 ? Math.PI / 3 : Math.PI / 2);
+        for (const s of [-1, 1]) {
+          const ba = a + s * side;
+          ctx.beginPath();
+          ctx.moveTo(bx, by);
+          ctx.lineTo(bx + Math.round(Math.cos(ba) * bl), by + Math.round(Math.sin(ba) * bl));
+          ctx.stroke();
+        }
+      }
+      if (rr >= 4 && ((k + (seed | 0)) & 1)) ctx.fillRect(ex, ey, 1, 1);
+    }
+    ctx.fillStyle = '#f2ffff';
+    ctx.fillRect(cx, cy, 1, 1);
+  },
+
+  drawParticles(particles, backPass) {
     const ctx = this.ctx;
     const cam = this.cam;
     const ox = cam.sw / 2 - cam.x;
@@ -2702,11 +2863,16 @@ const Renderer = {
     let curFont = '';
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
+      const backSnow = p.shape === 'snowflake' && p.iceBack;
+      if (backPass === true && !backSnow) continue;
+      if (backPass === false && backSnow) continue;
       const sx = p.x + ox;
       const sy = p.y + oy;
       if (sx < -30 || sx > cam.sw + 30 || sy < -30 || sy > cam.sh + 30) continue;
       ctx.globalAlpha = p.alpha;
-      if (p.isText) {
+      if (p.shape === 'snowflake') {
+        this._drawSnowflake(ctx, sx, sy, p.r, p.rot || 0, p.color, p.arms, p.branch, p.seed || 0);
+      } else if (p.isText) {
         // 发光用光晕贴图替代 shadowBlur
         this._drawGlow(sx, sy, (p.size || 16) * 1.1, p.color, 0.5);
         ctx.fillStyle = p.color;
@@ -2715,6 +2881,27 @@ const Renderer = {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(p.text, sx, sy);
+      } else if (p.shape === 'spark') {
+        // 命中火花：沿受击方向拉长的小亮线
+        const len = p.len || p.r * 4;
+        const c = Math.cos(p.rot || 0), sn = Math.sin(p.rot || 0);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = Math.max(1, p.r * 0.7);
+        ctx.beginPath();
+        ctx.moveTo(sx - c * len * 0.5, sy - sn * len * 0.5);
+        ctx.lineTo(sx + c * len * 0.5, sy + sn * len * 0.5);
+        ctx.stroke();
+      } else if (p.shape === 'shard') {
+        // 死亡碎片：旋转的尖锐三角
+        const len = p.len || p.r * 1.8;
+        const c = Math.cos(p.rot || 0), sn = Math.sin(p.rot || 0);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.moveTo(sx + c * len, sy + sn * len);
+        ctx.lineTo(sx - sn * p.r, sy + c * p.r);
+        ctx.lineTo(sx + sn * p.r, sy - c * p.r);
+        ctx.closePath();
+        ctx.fill();
       } else {
         // 发光用光晕贴图替代 shadowBlur
         this._drawGlow(Math.round(sx), Math.round(sy), p.r * 2.4, p.color, 0.4);
@@ -2759,92 +2946,4 @@ const Renderer = {
     ctx.restore();
   },
 
-  // ── ICE BLOCK (暗影冰封：3D 玻璃多面体罩) ─────────────────────────
-  // 冰面填充透明度分档颜色（避免每条边都拼一个 rgba 字符串）
-  _iceColors: (() => {
-    const arr = [];
-    for (let i = 0; i <= 8; i++) {
-      arr.push(`rgba(120,200,255,${(0.18 + 0.25 * (i / 8)).toFixed(3)})`);
-    }
-    return arr;
-  })(),
-
-  _drawIceBlock(enemy) {
-    const ctx = this.ctx;
-    const verts = enemy.freezeVerts;
-    if (!verts) return;
-    const s = Utils.worldToScreen(enemy.x, enemy.y, this.cam);
-    const sx = Math.round(s.x);
-    const sy = Math.round(s.y);
-
-    // 旋转 + 透视投影（绕 Y 轴）—— 复用投影缓冲，避免每帧分配
-    const rot = enemy.freezeRot || 0;
-    const cosR = Math.cos(rot), sinR = Math.sin(rot);
-    if (!enemy._iceProj || enemy._iceProj.length !== verts.length) {
-      enemy._iceProj  = verts.map(() => ({ x: 0, y: 0, z: 0 }));
-      enemy._iceOrder = verts.map((_, i) => i);
-    }
-    const proj = enemy._iceProj;
-    for (let i = 0; i < verts.length; i++) {
-      const v = verts[i], p = proj[i];
-      p.x = v.x * cosR - v.z * sinR;
-      p.y = v.y;
-      p.z = v.x * sinR + v.z * cosR;
-    }
-
-    ctx.save();
-    ctx.translate(sx, sy);
-
-    // 后半面（z 较小）—— 先画淡蓝远面
-    const order = enemy._iceOrder;
-    order.sort((a, b) => proj[a].z - proj[b].z);
-    // 描边（亮蓝玻璃高光；发光用宽半透明线替代 shadowBlur）
-    ctx.strokeStyle = 'rgba(122,220,255,0.25)';
-    ctx.lineWidth = 5;
-    for (let i = 0; i < order.length; i++) {
-      const a = proj[order[i]];
-      const b = proj[order[(i + 1) % order.length]];
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-    }
-    ctx.strokeStyle = 'rgba(180,230,255,0.75)';
-    ctx.lineWidth = 1.5;
-    for (let i = 0; i < order.length; i++) {
-      const a = proj[order[i]];
-      const b = proj[order[(i + 1) % order.length]];
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-    }
-
-    // 填充多面体（半透明蓝渐变，模拟玻璃）
-    const first = proj[order[0]].z, last = proj[order[order.length - 1]].z;
-    const minZ = first, maxZ = last;
-    const span = Math.max(1, maxZ - minZ);
-    for (let i = 0; i < order.length; i++) {
-      const a = proj[order[i]];
-      const b = proj[order[(i + 1) % order.length]];
-      const midZ = (a.z + b.z) / 2;
-      const bucket = Math.min(8, Math.max(0, Math.round(((midZ - minZ) / span) * 8)));
-      ctx.fillStyle = this._iceColors[bucket];
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    // 中心高亮（强化 3D 玻璃感）
-    this._drawGlow(0, -enemy.radius * 0.25, enemy.radius * 0.55, '#c0e8ff', 0.35);
-    ctx.fillStyle = 'rgba(220,240,255,0.22)';
-    ctx.beginPath();
-    ctx.arc(0, -enemy.radius * 0.25, enemy.radius * 0.3, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore();
-  }
 };

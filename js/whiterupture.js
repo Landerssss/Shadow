@@ -61,11 +61,7 @@ const WhiteRuptureFX = {
           EchoManager.handleRuptureArcs(e, state);
         }
       }
-      // 屏幕闪白：爆裂瞬间快速衰减（不遮挡整个画面）
-      if (e.t >= this.T_BURST - 0.02 && e.t < this.T_BURST + 0.12) {
-        e.flash = Math.max(e.flash, 0.12);
-      }
-      if (e.flash > 0) e.flash = Math.max(0, e.flash - dt * 0.9);
+      // 因果残响全屏白闪已移除：只保留世界空间视觉（节点/断裂环/裂口/弧线）
       if (e.t >= this.T_END) {
         e.arcs = [];
         this.effects.splice(i, 1);
@@ -87,16 +83,6 @@ const WhiteRuptureFX = {
       else if (e.t < this.T_CORE)    this._renderCore(ctx, s, e);
       else if (e.t < this.T_BURST)   this._renderBurst(ctx, s, e);
       else                           this._renderCrack(ctx, s, e, cam);
-    }
-    // 少量屏幕闪白（alpha 很低，绝不遮挡整个画面）
-    for (const e of this.effects) {
-      if (e.flash > 0.001) {
-        ctx.save();
-        ctx.globalAlpha = e.flash;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, cam.sw, cam.sh);
-        ctx.restore();
-      }
     }
   },
 

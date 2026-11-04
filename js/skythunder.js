@@ -4,22 +4,28 @@
 //   引雷   = 天空、垂直、巨大雷柱、落点、持续雷区、麻痹（本文件）
 //   漩涡电 = 局部、随机、围绕漩涡、短促细小放电（vortex.js，保持原样）
 //
-// 战斗流程（每 4 秒一次）：
-//   锁定主目标 → 天空预兆(350ms) → 天雷落地(140ms) → 持续雷区(1200ms) → 消散(300ms)
-//   落地一次性伤害 + 雷区 tick 伤害/麻痹（最多 2 个落点，第二落点较弱）
+// 战斗流程（每 4 秒开始一个批次）：
+//   批次数量 = min(6, 2 + floor(玩家等级 / 5))，逐道落地（实际间隔 550ms，硬性 ≥500ms）
+//   每道：逐次选目标 → 天空预兆(350ms) → 天雷落地(140ms) → 持续雷区(1200ms) → 消散(300ms)
+//   普通敌人落点建立区域预约（持续到目标死亡，落点不重叠）；BOSS 不做永久锁定
 
 // ─── 数值配置（所有倍率集中在此，禁止散落魔法数字）────────────────────────
 const SKY_THUNDER_CONFIG = {
-  cooldown: 4000,            // 触发间隔（ms）
-  searchRadius: 900,         // 首个目标搜索范围（px，相对玩家）
-  maxTargets: 2,             // 一次引雷最多落雷目标数（主 + 次）
-  chainRadius: 160,          // 第二目标搜索范围（px，相对主目标）
+  cooldown: 4000,            // 批次触发间隔（ms）
+  searchRadius: 900,         // 目标搜索范围（px，相对玩家）
 
-  strikeRadius: 120,         // 主落雷半径（px）
-  secondaryStrikeRadius: 90, // 第二目标落雷半径（px）
+  // 批次数量：min(6, 2 + floor(playerLevel / 5))
+  // Lv.1-4 → 2 道；Lv.5-9 → 3 道；Lv.10-14 → 4 道；Lv.15-19 → 5 道；Lv.20+ → 6 道
+  baseStrikeCount: 2,
+  strikeCountLevelStep: 5,
+  maxStrikeCount: 6,
 
-  damagePerTarget: 45,       // 主落雷初始伤害（每个目标 45，保持原公共闪电语义）
-  secondaryDamageMultiplier: 0.75, // 第二目标初始伤害倍率（45 × 0.75 = 33.75）
+  // 逐道落地：相邻两道「实际落地」间隔；硬性不低于 500ms
+  strikeInterval: 550,
+  strikeMinInterval: 500,
+
+  strikeRadius: 120,         // 每道落雷半径（px）
+  damagePerTarget: 45,       // 每道落雷初始伤害（数量成长不提高单道伤害）
 
   warningDuration: 350,      // 天空预兆时长（ms）
   strikeDuration: 140,       // 天雷落地时长（ms）
@@ -68,63 +74,158 @@ const SKY_THUNDER_EVENT = {
 };
 
 const SkyThunderManager = {
-  zones: [],    // 活跃雷区（warning → strike → active → fade）
-  scorch: [],   // 地面焦痕残留（纯视觉）
-  flash: 0,     // 屏幕闪光（≤ strikeFlashAlpha）
-  shake: 0,     // 震屏强度（≤ strikeCameraShake，快速衰减）
+  zones: [],         // 活跃雷区（warning → strike → active → fade）
+  scorch: [],        // 地面焦痕残留（纯视觉）
+  reservations: [],  // 普通敌人区域预约（持续到目标真实死亡）
+  flash: 0,          // 屏幕闪光（≤ strikeFlashAlpha）
+  shake: 0,          // 震屏强度（≤ strikeCameraShake，快速衰减）
 
   _nextId: 1,
+  _nextResId: 1,
   _hitThisFrame: new Set(),  // 同一敌人同一帧最多接受一次引雷伤害
   _paraGlobal: new Map(),    // 全局麻痹刷新记录（防多雷区永久麻痹）
   _paraEventCd: new Map(),   // 同目标 PARALYZE 事件冷却
   _mergeBuf: [],             // 渲染合并缓冲（45px 内雷区合并视觉）
   _enBuf: [],                // 敌人快照缓冲
 
-  // ── 生成引雷（PublicLightningManager 每 4 秒调用一次）────────────────────
-  spawnSkyThunderStrike(state) {
-    if (!state || !state.player) return;
+  // ── 数量成长：读取玩家等级（非流派等级/波次/无尽轮次）──────────────────
+  strikeCountForLevel(level) {
+    const cfg = SKY_THUNDER_CONFIG;
+    const lv = Math.max(1, Math.floor(level || 1));
+    return Math.min(cfg.maxStrikeCount,
+      cfg.baseStrikeCount + Math.floor(lv / cfg.strikeCountLevelStep));
+  },
+
+  // 从预警开始到「实际落地」的提前量（用于让实际落地间隔贴合配置）
+  strikeLeadSeconds() {
+    const cfg = SKY_THUNDER_CONFIG;
+    return (cfg.warningDuration + cfg.strikeDuration * 0.55) / 1000;
+  },
+
+  // 该批次是否还有「尚未落地」的攻击（warning / strike 未 struck）
+  hasPendingStrikeForBatch(batchId) {
+    for (let i = 0; i < this.zones.length; i++) {
+      const z = this.zones[i];
+      if (z.batchId !== batchId) continue;
+      if (z.state === 'warning' || (z.state === 'strike' && !z.struck)) return true;
+    }
+    return false;
+  },
+
+  // ── 生成单道引雷（PublicLightningManager 逐道调用）──────────────────────
+  // 每次只创建 1 个落点；成功返回 true；无合法目标返回 false（不强行补足）。
+  spawnSkyThunderStrike(state, opts) {
+    if (!state || !state.player) return false;
+    const cfg = SKY_THUNDER_CONFIG;
+    // 技能范围加成（BUFF「技能范围」：范围类效果半径增大）
+    const rangeMult = (state.genre === 3) ? EchoManager.skillRangeMult(state) : 1;
+    const radius = cfg.strikeRadius * rangeMult;
+    const batchId = (opts && opts.batchId != null) ? opts.batchId : 0;
+
+    const target = this._pickStrikeTarget(state, radius);
+    if (!target) return false;
+
+    this._pushZone(target.x, target.y, radius, cfg.damagePerTarget, 1, state, {
+      batchId,
+      targetId: target.id,
+      isBoss: target.type === 'boss',
+    });
+    return true;
+  },
+
+  // ── 目标选择：普通敌人优先（未预约 + 区域不重叠）→ BOSS ────────────────
+  _pickStrikeTarget(state, radius) {
     const cfg = SKY_THUNDER_CONFIG;
     const p = state.player;
     const enemies = EnemyManager.getAlive();
+    const maxD = cfg.searchRadius * cfg.searchRadius;
 
-    // 主目标：900px 范围内离玩家最近的敌人
-    let target = null, bestD = cfg.searchRadius * cfg.searchRadius;
-    for (const e of enemies) {
-      const dSq = Utils.distSq(e, p);
-      if (dSq < bestD) { bestD = dSq; target = e; }
+    // 1) 普通敌人：存活、未被预约、落点区域不与已有预约/雷区重叠
+    let best = null, bestD = maxD;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (!e.alive || e.type === 'boss') continue;
+      if (this._hasReservationForTarget(e.id)) continue;
+      if (!this._areaFree(e.x, e.y, radius)) continue;
+      const d = Utils.distSq(e, p);
+      if (d < bestD) { bestD = d; best = e; }
     }
-    if (!target) return;
+    if (best) return best;
 
-    // 技能范围加成（BUFF「技能范围」：范围类效果半径增大）
-    const rangeMult = (state.genre === 3) ? EchoManager.skillRangeMult(state) : 1;
-
-    // 第二目标：主目标 160px 范围内最近的另一个敌人（绝不找第三、第四个）
-    let extra = null, extraD = cfg.chainRadius * cfg.chainRadius;
-    for (const e of enemies) {
-      if (e === target) continue;
-      const dSq = Utils.distSq(e, target);
-      if (dSq < extraD) { extraD = dSq; extra = e; }
+    // 2) 没有合法普通敌人：优先尚未被雷区覆盖的 BOSS 位置
+    let boss = null, bossD = maxD;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (!e.alive || e.type !== 'boss') continue;
+      if (!this._areaFree(e.x, e.y, radius)) continue;
+      const d = Utils.distSq(e, p);
+      if (d < bossD) { bossD = d; boss = e; }
     }
+    if (boss) return boss;
 
-    // 主落雷（锁定主目标当前位置，预警期间不追踪）
-    this._pushZone(target.x, target.y, cfg.strikeRadius * rangeMult,
-      cfg.damagePerTarget, 1, state);
-    // 第二落雷（较弱）
-    if (extra && cfg.maxTargets >= 2) {
-      this._pushZone(extra.x, extra.y, cfg.secondaryStrikeRadius * rangeMult,
-        cfg.damagePerTarget * cfg.secondaryDamageMultiplier, 0.8, state);
+    // 3) BOSS 无未覆盖位置：按现有 BOSS 规则允许重复攻击
+    let fallback = null, fallbackD = maxD;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (!e.alive || e.type !== 'boss') continue;
+      const d = Utils.distSq(e, p);
+      if (d < fallbackD) { fallbackD = d; fallback = e; }
     }
+    return fallback;
   },
 
-  _pushZone(x, y, radius, damage, visualScale, state) {
+  // 落点区域排他：与所有预约、所有现存雷区（预警/落雷/活动/消散）都不重叠
+  _areaFree(x, y, radius) {
+    for (let i = 0; i < this.reservations.length; i++) {
+      const r = this.reservations[i];
+      const need = radius + r.radius;
+      const dx = x - r.x, dy = y - r.y;
+      if (dx * dx + dy * dy < need * need) return false;
+    }
+    for (let i = 0; i < this.zones.length; i++) {
+      const z = this.zones[i];
+      const need = radius + z.radius;
+      const dx = x - z.x, dy = y - z.y;
+      if (dx * dx + dy * dy < need * need) return false;
+    }
+    return true;
+  },
+
+  _hasReservationForTarget(targetId) {
+    for (let i = 0; i < this.reservations.length; i++) {
+      if (this.reservations[i].targetId === targetId) return true;
+    }
+    return false;
+  },
+
+  _reservationByZone(zoneId) {
+    for (let i = 0; i < this.reservations.length; i++) {
+      if (this.reservations[i].zoneId === zoneId) return this.reservations[i];
+    }
+    return null;
+  },
+
+  _findEnemyById(id) {
+    const list = EnemyManager.enemies;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === id) return list[i];
+    }
+    return null;
+  },
+
+  _pushZone(x, y, radius, damage, visualScale, state, opts) {
     const cfg = SKY_THUNDER_CONFIG;
-    // 超出上限：优先回收剩余时间最短的雷区
+    const o = opts || {};
+    // 超出上限：优先回收已落地且剩余时间最短的雷区，绝不淘汰未落地预警
     while (this.zones.length >= cfg.maxActiveZones) {
-      let worst = 0, worstRemain = Infinity;
+      let worst = -1, worstRemain = Infinity;
       for (let i = 0; i < this.zones.length; i++) {
-        const r = this._remain(this.zones[i]);
+        const z = this.zones[i];
+        if (z.state === 'warning' || (z.state === 'strike' && !z.struck)) continue;
+        const r = this._remain(z);
         if (r < worstRemain) { worstRemain = r; worst = i; }
       }
+      if (worst < 0) worst = 0;
       this.zones.splice(worst, 1);
     }
     const seed = Math.random() * 1000;
@@ -150,6 +251,11 @@ const SkyThunderManager = {
       affectedTargets: new Set(),
       paralyzeTargets: new Map(),
       consumed: false,
+      // 批次 / 目标 / 预约
+      batchId: o.batchId || 0,
+      targetId: (o.targetId != null) ? o.targetId : -1,
+      isBoss: !!o.isBoss,
+      reservationId: -1,
       // 视觉
       seed,
       bolt: null,
@@ -162,6 +268,22 @@ const SkyThunderManager = {
       miniLife: 0,
     };
     this._genBolt(z);
+
+    // 普通敌人：建立持续到目标真实死亡的区域预约（BOSS 不做永久锁定）
+    if (!z.isBoss && z.targetId >= 0) {
+      const res = {
+        id: this._nextResId++,
+        targetId: z.targetId,
+        x, y,
+        radius,
+        batchId: z.batchId,
+        zoneId: z.id,
+        landed: false,
+      };
+      z.reservationId = res.id;
+      this.reservations.push(res);
+    }
+
     this.zones.push(z);
   },
 
@@ -220,6 +342,9 @@ const SkyThunderManager = {
       this.scorch[i].life -= dt;
       if (this.scorch[i].life <= 0) this.scorch.splice(i, 1);
     }
+
+    // 预约有效性：目标真实死亡 / 合法移除时释放（雷区消散不释放预约）
+    this._checkReservations(state);
   },
 
   // 相位切换：warning → strike → active → fade → 结束
@@ -269,11 +394,24 @@ const SkyThunderManager = {
     const cfg = SKY_THUNDER_CONFIG;
     const enemies = EnemyManager.getAlive();
     const rr = z.radius * z.radius;
+    // BOSS 共享血池：每道雷最多结算一次（多眼球重叠不复制伤害）
+    let bossHit = false;
     for (const e of enemies) {
       if (!e.alive) continue;
       if (Utils.distSq(e, z) > rr) continue;
+      if (e.type === 'boss') {
+        if (bossHit) continue;
+        bossHit = true;
+      }
       z.affectedTargets.add(e.id);
       this.applySkyThunderDamage(z, e, state);
+    }
+    // 预约标记已落地（预约本身保留到目标真实死亡）
+    const res = this._reservationByZone(z.id);
+    if (res) res.landed = true;
+    // 记录实际落地时间（游戏时间；暂停时 update 不执行，计时自然停止）
+    if (typeof PublicLightningManager !== 'undefined' && z.batchId) {
+      PublicLightningManager.onActualStrike(z.batchId, state ? state.time : 0);
     }
     // 屏幕反馈（同帧多次落地合并为一次；强度低于白蚀爆裂）
     this.flash = Math.max(this.flash, SKY_THUNDER_FEEDBACK.strikeFlashAlpha);
@@ -304,9 +442,41 @@ const SkyThunderManager = {
       if (!e.alive) continue;
       if (Utils.distSq(e, z) <= rr) list.push(e);
     }
-    // 3) 麻痹（含 PARALYZE 事件）→ 4) tick 伤害
+    // 3) 麻痹（含 PARALYZE 事件；BOSS 遵守控制抗性，只刷新不叠加）
     for (const e of list) this.applySkyThunderParalyze(z, e, state);
-    for (const e of list) this.applySkyThunderDamage(z, e, state);
+    // 4) tick 伤害：BOSS 共享血池每个雷区每 tick 最多结算一次
+    let bossHit = false;
+    for (const e of list) {
+      if (e.type === 'boss') {
+        if (bossHit) continue;
+        bossHit = true;
+      }
+      this.applySkyThunderDamage(z, e, state);
+    }
+  },
+
+  // ── 预约有效性检查（只释放真实死亡/移除的目标；离屏/未更新不误判）────────
+  _checkReservations(state) {
+    if (this.reservations.length === 0) return;
+    for (let i = this.reservations.length - 1; i >= 0; i--) {
+      const r = this.reservations[i];
+      const target = this._findEnemyById(r.targetId);
+      if (target && target.alive) continue;
+
+      // 目标已真实死亡（或已从本局移除）：释放预约
+      this.reservations.splice(i, 1);
+
+      // 尚未落地的对应攻击：取消，不在失效位置强行落雷
+      for (let j = this.zones.length - 1; j >= 0; j--) {
+        const z = this.zones[j];
+        if (z.reservationId !== r.id || z.struck) continue;
+        this.zones.splice(j, 1);
+        // 补偿批次数量，允许后续重新选择合法目标（仍受落地间隔约束）
+        if (typeof PublicLightningManager !== 'undefined' && z.batchId) {
+          PublicLightningManager.compensate(z.batchId);
+        }
+      }
+    }
   },
 
   // ── 伤害入口（走 enemy.takeDamage：含减伤 / BOSS 共享血池 / 真实死亡）────
@@ -318,7 +488,6 @@ const SkyThunderManager = {
     const dmg = zone.damage;
     enemy.takeDamage(dmg, state, 'player');
     const sv = Utils.worldToScreen(enemy.x, enemy.y - 20, Renderer.cam);
-    Utils.spawnDmgNum(sv.x, sv.y, dmg, enemy.type === 'boss' ? 'boss' : '');
   },
 
   // ── 麻痹入口（刷新不叠加；全局限频防多雷区永久麻痹）──────────────────────
@@ -606,6 +775,26 @@ const SkyThunderManager = {
 
   // ── 空中层：暗云 / 垂直光路 / 巨大雷柱 + 分叉 / 落地冲击闪光 / 屏幕闪光 ──
   _renderAir(ctx, cam, time) {
+    // 已锁定小怪头顶的极小米蓝紫色雷印（预警期间；不画预约范围圈）
+    for (let i = 0; i < this.reservations.length; i++) {
+      const r = this.reservations[i];
+      if (r.landed) continue;
+      const en = this._findEnemyById(r.targetId);
+      if (!en || !en.alive) continue;
+      if (!Utils.isOnScreen(en.x, en.y, cam, 40)) continue;
+      const sv = Utils.worldToScreen(en.x, en.y - (en.radius || 12) - 10, cam);
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = '#9d7bff';
+      ctx.beginPath();
+      ctx.moveTo(sv.x, sv.y - 4);
+      ctx.lineTo(sv.x + 3, sv.y + 2);
+      ctx.lineTo(sv.x - 3, sv.y + 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
     for (const z of this.zones) {
       if (!Utils.isOnScreen(z.x, z.y, cam, z.radius + 120)) continue;
       const sv = Utils.worldToScreen(z.x, z.y, cam);
@@ -780,10 +969,13 @@ const SkyThunderManager = {
   clearSkyThunderStrikes() {
     this.zones.length = 0;
     this.scorch.length = 0;
+    this.reservations.length = 0;
     this.flash = 0;
     this.shake = 0;
     this._hitThisFrame.clear();
     this._paraGlobal.clear();
     this._paraEventCd.clear();
+    this._mergeBuf.length = 0;
+    this._enBuf.length = 0;
   },
 };

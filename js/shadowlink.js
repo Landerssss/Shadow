@@ -71,8 +71,6 @@ const ShadowLink = {
           if (state.genre === 3) {
             EchoManager.onLink(e.x, e.y, Utils.angle(player, se), dmg, e, state);
           }
-          const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
-          Utils.spawnDmgNum(sv.x, sv.y, dmg);
           Particles.spawn(e.x, e.y, '#aa44ff', 4, 50, 0.3);
         }
       }
@@ -110,8 +108,6 @@ const ShadowLink = {
           const dmg = CONFIG.RICOCHET.LINK_DAMAGE;
           // 连线伤害标 sourceType 'shadow'：不推进冰封计数、不消费元素、不递归
           e.takeDamage(dmg, state, 'shadow');
-          const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
-          Utils.spawnDmgNum(sv.x, sv.y, dmg);
           Particles.spawn(e.x, e.y, '#aa44ff', 4, 50, 0.3);
         }
       }
@@ -276,40 +272,128 @@ const DeathShadowManager = {
   clear() { this.shadows = []; }
 };
 
-// ─── SHADOW EXPLOSION (怪物死后白色圆圈爆破) ────────────────────────────────
+// ─── 暗影冲击（流派 0 Lv.6：暗影消散 / 敌人死亡触发）────────────────────────
+// 每道波：半径 85、伤害 30 + 有效攻击 × 0.8；扩散 280ms + 余波 140ms；
+// 对同一目标只结算一次；击杀可连锁，最多 2 代、单链最多 12 道。
 const ShadowExplosionManager = {
   explosions: [],
+  _chainCount: new Map(),
+  _seq: 0,
 
-  spawn(x, y, state) {
-    const cfg = CONFIG.ECHO;
-    const radius = cfg.EXPLOSION_RADIUS;
-    const dmg = cfg.EXPLOSION_DAMAGE;
-    for (const e of EnemyManager.enemies) {
-      if (!e.alive) continue;
-      const dx = e.x - x, dy = e.y - y;
-      const rSum = radius + e.radius;
-      if (dx * dx + dy * dy < rSum * rSum) {
-        e.takeDamage(dmg, state);
-      }
-    }
+  spawn(x, y, state, opts) {
+    const o = opts || {};
+    const sw = (typeof COMBAT_FX !== 'undefined') ? COMBAT_FX.shockwave
+      : { radius: 85, dmgBase: 30, dmgRatio: 0.8, expandMs: 280, afterMs: 140, chainDepth: 2, maxWavesPerChain: 12 };
+    const depth = o.depth || 0;
+    const rootId = (o.rootId != null) ? o.rootId : ++this._seq;
+    if (depth > sw.chainDepth) return;
+
+    // 单链波数上限
+    const cnt = this._chainCount.get(rootId) || 0;
+    if (cnt >= sw.maxWavesPerChain) return;
+    this._chainCount.set(rootId, cnt + 1);
+
+    const life = (sw.expandMs + sw.afterMs) / 1000;
     this.explosions.push({
-      x, y, radius: 0, maxRadius: radius,
-      life: 0.5, maxLife: 0.5,
+      x, y,
+      radius: sw.radius * 0.35,
+      maxRadius: sw.radius,
+      life, maxLife: life,
+      expand: sw.expandMs / 1000,
+      depth, rootId,
+      hitIds: new Set(),
+      hitBoss: false,
+      settled: false,
+      killed: [],
     });
-    // 白色粒子（爆破伴随飞溅）
-    Particles.spawn(x, y, '#ffffff', 16, 160, 0.5);
+
+    // 少量柔和紫光 + 网格波动 + 轻微震屏（不做尖角碎片爆发）
+    if (typeof Particles !== 'undefined') Particles.spawn(x, y, '#AE7BFF', 4, 100, 0.3);
+    if (typeof CombatFeedback !== 'undefined') {
+      CombatFeedback.shake(COMBAT_FX.shake.blastPx, COMBAT_FX.shake.ms);
+      CombatFeedback.gridWave(x, y, sw.radius, 0.7);
+    }
   },
 
-  update(dt) {
+  update(dt, state) {
     for (let i = this.explosions.length - 1; i >= 0; i--) {
       const e = this.explosions[i];
       e.life -= dt;
-      e.radius = e.maxRadius * (1 - e.life / e.maxLife);
-      if (e.life <= 0) this.explosions.splice(i, 1);
+
+      // 公共爆炸等外部视觉对象（无 hitIds）：只做生命周期衰减
+      if (!e.hitIds) {
+        e.radius = e.maxRadius * (1 - Math.max(0, e.life) / e.maxLife);
+        if (e.life <= 0) this.explosions.splice(i, 1);
+        continue;
+      }
+
+      // 扩散阶段半径增长，余波阶段保持最大半径
+      const elapsed = e.maxLife - e.life;
+      const k = Math.min(1, elapsed / e.expand);
+      e.radius = e.maxRadius * Math.max(0.35, k);
+
+      if (state) this._settle(e, state);
+
+      // 扩散结束：对本次波造成的击杀生成下一代（最多 2 代）
+      if (!e.settled && elapsed >= e.expand) {
+        e.settled = true;
+        this._chain(e, state);
+      }
+
+      if (e.life <= 0) {
+        this.explosions.splice(i, 1);
+        // 该链已无活动波时清理计数
+        let alive = false;
+        for (let j = 0; j < this.explosions.length; j++) {
+          if (this.explosions[j].rootId === e.rootId) { alive = true; break; }
+        }
+        if (!alive) this._chainCount.delete(e.rootId);
+      }
     }
   },
 
-  clear() { this.explosions = []; }
+  _settle(e, state) {
+    const r = e.radius;
+    const sw = COMBAT_FX.shockwave;
+    const dmg = sw.dmgBase + (state.player ? state.player.effectiveDamage * sw.dmgRatio : 0);
+    const enemies = EnemyManager.enemies;
+    state._shadowWaveHit = true;
+    try {
+      for (let i = 0; i < enemies.length; i++) {
+        const en = enemies[i];
+        if (!en.alive) continue;
+        const dx = en.x - e.x, dy = en.y - e.y;
+        const rSum = r + en.radius;
+        if (dx * dx + dy * dy > rSum * rSum) continue;
+        // BOSS 共享血池：同一道波只结算一次
+        if (en.type === 'boss') {
+          if (e.hitBoss) continue;
+          e.hitBoss = true;
+        } else {
+          // 每道波对同一目标只结算一次
+          if (e.hitIds.has(en.id)) continue;
+          e.hitIds.add(en.id);
+        }
+        en.takeDamage(dmg, state, 'player', { dirX: dx, dirY: dy });
+        if (!en.alive) e.killed.push({ x: en.x, y: en.y });
+      }
+    } finally {
+      state._shadowWaveHit = false;
+    }
+  },
+
+  _chain(e, state) {
+    if (!state || e.depth >= COMBAT_FX.shockwave.chainDepth) return;
+    for (let i = 0; i < e.killed.length; i++) {
+      const k = e.killed[i];
+      this.spawn(k.x, k.y, state, { depth: e.depth + 1, rootId: e.rootId });
+    }
+  },
+
+  clear() {
+    this.explosions = [];
+    this._chainCount.clear();
+  },
 };
 
 // ─── PUBLIC BLAST（公共机制卡：公共爆炸）────────────────────────────────────
@@ -361,9 +445,13 @@ const PublicBlastManager = {
       }
     }
     ShadowExplosionManager.explosions.push({
-      x, y, radius: 0, maxRadius: radius, life: 0.5, maxLife: 0.5
+      x, y, radius: 0, maxRadius: radius, life: 0.5, maxLife: 0.5, kind: 'public'
     });
     Particles.spawn(x, y, '#ff9a3c', 12, 140, 0.5);
+    // 小爆炸震屏（0.2~0.4px；多爆炸由统一入口取最大合并）
+    if (typeof CombatFeedback !== 'undefined') {
+      CombatFeedback.shake(COMBAT_FX.shake.smallPx, COMBAT_FX.shake.ms);
+    }
     // 流派 3：爆炸中心生成爆裂节点，范围内有效敌人提供事件输入
     //（hitCount ≥1 → HIT 输入；≥3 → RUPTURE 输入，直接推进白蚀爆裂）
     if (genre3) {
@@ -387,22 +475,100 @@ const PublicBlastManager = {
 const PublicLightningManager = {
   enabled: false,
   timer: CONFIG.CAUSAL.PUBLIC_LIGHTNING_INTERVAL,
+  _batch: null,      // 同时最多 1 个调度批次
+  _batchSeq: 0,
 
   update(dt, state) {
     if (!this.enabled) return;
-    this.timer -= dt;
-    if (this.timer <= 0) {
-      // 「暗影律动」冷却缩减：引雷产生频率提高（倍率越小越快）
-      // 暗影律动联动：流派 3（因果节点延迟）与流派 4（弹射流，仅冷却适配）均生效
-      const cdMult = (state && (state.genre === 3 || state.genre === 4))
-        ? EchoManager.mechCooldownMult(state) : 1;
-      this.timer = CONFIG.CAUSAL.PUBLIC_LIGHTNING_INTERVAL * cdMult;
-      SkyThunderManager.spawnSkyThunderStrike(state);
+
+    // 批次进行中：逐道调度；批次未完成时冷却不叠加新批次
+    if (this._batch) {
+      this._updateBatch(state);
+      return;
     }
+
+    this.timer -= dt;
+    if (this.timer > 0) return;
+
+    // 批次开始时读取玩家等级：升级只影响下一批
+    const lvl = (state && state.player) ? state.player.level : 1;
+    const count = SkyThunderManager.strikeCountForLevel(lvl);
+    if (count <= 0) {
+      this.timer = this._cooldown(state);
+      return;
+    }
+    this._batch = {
+      id: ++this._batchSeq,
+      count,
+      remaining: count,
+      lastActualAt: -Infinity,
+      scheduled: 0,
+    };
+    this._updateBatch(state);
+  },
+
+  _updateBatch(state) {
+    const b = this._batch;
+    if (!b) return;
+    const stm = SkyThunderManager;
+
+    // 批次完成：计划数量发完，且没有尚未落地的攻击
+    if (b.remaining <= 0 && !stm.hasPendingStrikeForBatch(b.id)) {
+      this._batch = null;
+      this.timer = this._cooldown(state);
+      return;
+    }
+    if (b.remaining <= 0) return;
+
+    // 逐个落地：同一时间只保留一道未落地攻击
+    if (stm.hasPendingStrikeForBatch(b.id)) return;
+
+    const now = (state && state.time) || 0;
+    const lead = stm.strikeLeadSeconds();
+    const interval = Math.max(SKY_THUNDER_CONFIG.strikeMinInterval,
+      SKY_THUNDER_CONFIG.strikeInterval) / 1000;
+    // 提前 lead 调度，使相邻「实际落地」间隔贴合配置（硬性 ≥500ms）
+    if (b.lastActualAt > -Infinity && now + lead < b.lastActualAt + interval) return;
+
+    // 每次 update 最多调度 1 道：低帧率/卡顿恢复时不补发、不缩短预警
+    const ok = stm.spawnSkyThunderStrike(state, { batchId: b.id });
+    if (!ok) {
+      // 无合法目标：本批剩余落雷不强行生成
+      b.remaining = 0;
+      this._batch = null;
+      this.timer = this._cooldown(state);
+      return;
+    }
+    b.remaining--;
+    b.scheduled++;
+  },
+
+  // SkyThunderManager 在真实落地瞬间回调（不是对象创建时间）
+  onActualStrike(batchId, actualAt) {
+    if (this._batch && this._batch.id === batchId) {
+      this._batch.lastActualAt = actualAt;
+    }
+  },
+
+  // 目标在落雷前死亡：补偿一道，允许后续重新选择合法目标（仍受间隔约束）
+  compensate(batchId) {
+    const b = this._batch;
+    if (!b || b.id !== batchId) return;
+    if (b.remaining < b.count) b.remaining++;
+  },
+
+  _cooldown(state) {
+    // 「暗影律动」冷却缩减：引雷产生频率提高（倍率越小越快）
+    // 流派 3（因果节点延迟）与流派 4（弹射流，仅冷却适配）均生效
+    const cdMult = (state && (state.genre === 3 || state.genre === 4))
+      ? EchoManager.mechCooldownMult(state) : 1;
+    return CONFIG.CAUSAL.PUBLIC_LIGHTNING_INTERVAL * cdMult;
   },
 
   clear() {
     this.enabled = false;
     this.timer = CONFIG.CAUSAL.PUBLIC_LIGHTNING_INTERVAL;
+    this._batch = null;
+    this._batchSeq = 0;
   }
 };

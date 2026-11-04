@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>暗影冰封 · 俯视角逐面结晶冰壳预览</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #07030f; overflow: hidden; font-family: "Noto Sans SC", sans-serif; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    .ui { position: fixed; left: 16px; top: 16px; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; max-width: 760px; }
+    button { background: #17102e; color: #cfe8ff; border: 1px solid #4a5f9a; border-radius: 4px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+    button:hover { border-color: #8fe6ff; color: #f2ffff; }
+    .note { position: fixed; right: 16px; top: 16px; z-index: 2; color: #9fb6d8; font-size: 12px; line-height: 1.6; text-align: right; }
+    .status { position: fixed; left: 16px; bottom: 16px; z-index: 2; color: #8fe6ff; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <canvas id="preview"></canvas>
+  <div class="ui">
+    <button id="btn-enter">重新冻结</button>
+    <button id="btn-exit">自然解除</button>
+    <button id="btn-death-enter">形成中死亡</button>
+    <button id="btn-death-hold">保持中死亡</button>
+    <button id="btn-pause">暂停 / 恢复</button>
+    <button id="btn-move">移动：开</button>
+    <button id="btn-auto">循环播放：关</button>
+  </div>
+  <div class="note">真实游戏背景 + 真实近战红眼怪 / 治疗怪渲染<br>冰壳只叠加在怪物外围</div>
+  <div class="status" id="status"></div>
+
+  <script src="../js/utils.js"></script>
+  <script src="../js/config.js"></script>
+  <script src="../js/particles.js"></script>
+  <script src="../js/iceshell.js"></script>
+  <script src="../js/renderer.js"></script>
+  <script>
+    const canvas = document.getElementById('preview');
+    const ctx = canvas.getContext('2d');
+    let cam = { x: 0, y: 0, sw: 0, sh: 0 };
+
+    function fitCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      cam.sw = canvas.width;
+      cam.sh = canvas.height;
+      cam.x = canvas.width / 2;
+      cam.y = canvas.height / 2;
+      Renderer.ctx = ctx;
+      Renderer.cam = cam;
+      CONFIG.MAP_W = canvas.width;
+      CONFIG.MAP_H = canvas.height;
+    }
+    fitCanvas();
+    window.addEventListener('resize', fitCanvas);
+
+    let time = 0, paused = false, moving = true, pendingDeath = null;
+
+    function makeEnemy(type, id, x) {
+      const cfg = CONFIG.ENEMY_TYPES[type];
+      return {
+        id, type, x, y: canvas.height / 2, radius: cfg.radius,
+        hp: cfg.hp, maxHp: cfg.hp, alive: true,
+        spawnTimer: 1, hitTimer: 0,
+        flashTimer: 0, flashDur: 0, flashAlpha: 0,
+        freezeTimer: 10, freezeSpeedMult: 0.1,
+        freezeHitCount: 0, freezeLastTime: 0, _iceShell: null,
+        waveRings: [], healLinks: [],
+        chargerState: 'chase', chargeDirX: 1, chargeDirY: 0,
+        lobState: 'cooldown', podPulse: 0, swayPhase: 0,
+      };
+    }
+
+    let melee, healer, enemies;
+    function reset() {
+      IceShell.clear();
+      if (typeof Particles !== 'undefined') Particles.clear();
+      const cx = canvas.width / 2;
+      melee = makeEnemy('melee', 9001, cx - 150);
+      healer = makeEnemy('healer', 9002, cx + 170);
+      enemies = [melee, healer];
+      pendingDeath = null;
+      time = 0;
+    }
+    reset();
+
+    // 截图/检查用：?warm=1.2 先推进到保持；?exit=0.15 再推进碎裂；?death=enter|hold 触发死亡。
+    const q = new URLSearchParams(location.search);
+    const warm = parseFloat(q.get('warm') || '0');
+    if (warm > 0) {
+      time = warm;
+      const n = Math.ceil(warm * 120);
+      for (let i = 0; i < n; i++) {
+        IceShell.update(1 / 120, enemies);
+        Particles.update(1 / 120);
+      }
+    }
+    const exitT = parseFloat(q.get('exit') || '0');
+    if (exitT > 0) {
+      for (const e of enemies) e.freezeTimer = 0;
+      const n = Math.ceil(exitT * 120);
+      for (let i = 0; i < n; i++) {
+        IceShell.update(1 / 120, enemies);
+        Particles.update(1 / 120);
+      }
+      time += exitT;
+    }
+    const death = q.get('death');
+    if (death === 'enter' || death === 'hold') {
+      killFrozen();
+      for (let i = 0; i < 15; i++) {
+        IceShell.update(1 / 120, enemies);
+        Particles.update(1 / 120);
+      }
+      time += 0.125;
+    }
+
+    if (q.get('pause') === '1') paused = true;
+
+    let auto = q.get('auto') === '1';
+    let autoClock = 0;
+    const autoBtn = document.getElementById('btn-auto');
+    autoBtn.textContent = '循环播放：' + (auto ? '开' : '关');
+    autoBtn.onclick = () => {
+      auto = !auto;
+      autoClock = 0;
+      autoBtn.textContent = '循环播放：' + (auto ? '开' : '关');
+    };
+
+    function releaseAll() {
+      for (const e of enemies) { e.freezeTimer = 0; }
+    }
+
+    function killFrozen() {
+      for (const e of enemies) {
+        if (e.alive && e._iceShell) {
+          IceShell.onEnemyDeath(e);
+          e.alive = false;
+        }
+      }
+    }
+
+    document.getElementById('btn-enter').onclick = () => {
+      reset();
+      for (const e of enemies) { e.freezeTimer = 10; }
+    };
+    document.getElementById('btn-exit').onclick = () => releaseAll();
+    document.getElementById('btn-death-enter').onclick = () => {
+      reset();
+      for (const e of enemies) { e.freezeTimer = 10; }
+      pendingDeath = 0.24;
+    };
+    document.getElementById('btn-death-hold').onclick = () => {
+      for (const e of enemies) { if (e.alive) e.freezeTimer = 10; }
+      pendingDeath = 0.9;
+    };
+    document.getElementById('btn-pause').onclick = () => { paused = !paused; };
+    const moveBtn = document.getElementById('btn-move');
+    moveBtn.onclick = () => { moving = !moving; moveBtn.textContent = '移动：' + (moving ? '开' : '关'); };
+
+    function drawBackground() {
+      Renderer.ctx = ctx;
+      Renderer.cam = cam;
+      ctx.fillStyle = '#07030f';
+      ctx.fillRect(0, 0, cam.sw, cam.sh);
+      Renderer.drawMap();
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      if (!paused) {
+        time += dt;
+        if (auto) {
+          autoClock += dt;
+          if (autoClock > 4.4) { reset(); autoClock = 0; }
+          const frozen = autoClock < 3.2;
+          for (const e of enemies) e.freezeTimer = frozen ? 10 : 0;
+        }
+        if (moving) {
+          const cx = canvas.width / 2;
+          melee.x = cx - 150 + Math.sin(time * 0.9) * 48;
+          healer.x = cx + 170 + Math.sin(time * 0.7 + 1.2) * 36;
+        }
+        if (pendingDeath !== null) {
+          pendingDeath -= dt;
+          if (pendingDeath <= 0) { pendingDeath = null; killFrozen(); }
+        }
+        IceShell.update(dt, enemies);
+        Particles.update(dt);
+      }
+
+      drawBackground();
+      ctx.save();
+      Renderer.drawParticles(Particles.list, true);
+      for (const e of enemies) if (e.alive) Renderer.drawEnemy(e, time, { x: 0, y: 0 });
+      IceShell.drawDetached(ctx, 'back', time);
+      IceShell.drawDetached(ctx, 'front', time);
+      Renderer.drawParticles(Particles.list, false);
+      ctx.restore();
+
+      const phases = enemies.map((e) => {
+        const s = e._iceShell;
+        if (s) return e.type + ':' + s.phase;
+        return e.type + (e.alive ? ':—' : ':dead');
+      }).join('  ');
+      document.getElementById('status').textContent = (paused ? '已暂停  ' : '') + phases;
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

@@ -86,9 +86,7 @@ class Vortex {
 
         // Tick damage
         if (doTick) {
-          e.takeDamage(this.tickDamage, state);
-          const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
-          Utils.spawnDmgNum(sv.x, sv.y, this.tickDamage);
+          e.takeDamage(this.tickDamage, state, undefined, { dot: true });
         }
       }
     }
@@ -222,10 +220,7 @@ class RiftLaser {
       const eAngle = Utils.angle(this, e);
       const diff = Math.abs(((eAngle - angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
       if (diff < 0.25) { // within ~14 degrees
-        e.takeDamage(dmg, this.state);
-        const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
-        Utils.spawnDmgNum(sv.x, sv.y, dmg, 'crit');
-        Particles.spawn(e.x, e.y, '#ff00ff', 8, 80, 0.4);
+        e.takeDamage(dmg, this.state, 'player', { dirX: e.x - this.x, dirY: e.y - this.y });
         this._damaged.add(e.id);
       }
     }

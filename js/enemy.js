@@ -5,6 +5,8 @@ class Enemy {
   constructor(x, y, scaleFactor = 1, type = 'melee', state = null) {
     this.id    = _enemyId++;
     this.type  = type;
+    // 得分：固定基础分，随实例保存；对象复用时由构造函数重新赋值
+    this.scoreValue = CONFIG.ENEMY_SCORE[type] || 0;
     this.x     = x;
     this.y     = y;
     this.alive = true;
@@ -31,6 +33,15 @@ class Enemy {
     this.color   = cfg.color;
     this.hitTimer = 0;
 
+    // ── 战斗反馈状态（闪白 / 击退 / 形变 / 合并窗口）──
+    this.flashTimer = 0;
+    this.flashDur   = 0;
+    this.flashAlpha = 0;
+    this.kx = 0;            // 击退速度（px/s，衰减积分 = 位移）
+    this.ky = 0;
+    this._squash = null;    // 挤压拉伸（仅渲染）
+    this._kbWin = null;     // 120ms 击退位移累计窗口
+
     // 新敌人特殊攻击伤害：接入时间成长（与接触伤害同一 scaleFactor，不重复乘）
     this.chargeDamage    = Math.round((cfg.chargeDamage || 0) * scaleFactor);
     this.explosionDamage = Math.round((cfg.explosionDamage || 0) * scaleFactor);
@@ -48,12 +59,12 @@ class Enemy {
     this.healLinks  = []; // healer 怪物对其他怪物的回血连线
     this.spawnTimer = 0;   // 0 -> 1 冒出动画
 
-    // 暗影冰封
+    // 暗影冰封（视觉实例由 IceShell 管理，不参与玩法结算）
     this.freezeTimer      = 0;   // 冰封剩余时间
     this.freezeSpeedMult  = 1;   // 冰封期间移速倍率（0.1 = -90%）
     this.freezeHitCount   = 0;   // 已受攻击次数（玩家/暗影）
     this.freezeLastTime   = -1e9; // 上次冰封触发时间（state.time）
-    this.freezeRot        = 0;   // 多面体旋转角
+    this._iceShell        = null; // 俯视角逐面结晶冰壳视觉实例
 
     // 引雷麻痹（电击类控制：与冰封独立，不显示冰罩）
     this.paralyzeTimer      = 0;   // 麻痹剩余时间（只刷新不叠加）
@@ -89,14 +100,34 @@ class Enemy {
   update(dt, player, enemies, state) {
     if (!this.alive) return;
     if (this.hitTimer > 0) this.hitTimer -= dt;
+
+    // 战斗反馈：闪白 / 形变 / 击退衰减（与移动逻辑独立，不覆盖基础移速与冰封麻痹）
+    if (this.flashTimer > 0) {
+      this.flashTimer -= dt;
+      if (this.flashTimer < 0) this.flashTimer = 0;
+    }
+    if (this._squash && this._squash.t > 0) {
+      this._squash.t -= dt;
+      if (this._squash.t <= 0) this._squash = null;
+    }
+    if (this.kx !== 0 || this.ky !== 0) {
+      this.x += this.kx * dt;
+      this.y += this.ky * dt;
+      const decay = (typeof COMBAT_FX !== 'undefined') ? COMBAT_FX.knockback.decay : 16;
+      const f = Math.exp(-decay * dt);
+      this.kx *= f;
+      this.ky *= f;
+      if (Math.abs(this.kx) < 1) this.kx = 0;
+      if (Math.abs(this.ky) < 1) this.ky = 0;
+    }
+
     if (this.spawnTimer < 1) {
       this.spawnTimer = Math.min(1, this.spawnTimer + dt / 0.4); // 0.4s 冒出
     }
 
-    // 暗影冰封：倒计时 + 多面体旋转
+    // 暗影冰封：倒计时（仅计时，视觉由 IceShell 根据 freezeTimer 驱动）
     if (this.freezeTimer > 0) {
       this.freezeTimer -= dt;
-      this.freezeRot   += dt * 0.6;
       if (this.freezeTimer <= 0) {
         this.freezeTimer     = 0;
         this.freezeSpeedMult = 1;
@@ -446,24 +477,6 @@ class Enemy {
     }
   }
 
-  // 暗影冰封：生成不规则多面体顶点（3D 玻璃罩）
-  _genIceVerts(radius) {
-    const N = 12;
-    const verts = [];
-    for (let i = 0; i < N; i++) {
-      const u = Math.random();
-      const v = Math.random();
-      const theta = 2 * Math.PI * u;
-      const phi   = Math.acos(2 * v - 1);
-      verts.push({
-        x: radius * Math.sin(phi) * Math.cos(theta),
-        y: radius * Math.sin(phi) * Math.sin(theta) * 0.78, // y 略压扁，更像球状
-        z: radius * Math.cos(phi),
-      });
-    }
-    return verts;
-  }
-
   _shootAt(player) {
     const cfg = CONFIG.ENEMY_TYPES.shooter;
     const dx = player.x - this.x;
@@ -508,7 +521,18 @@ class Enemy {
     }
   }
 
-  takeDamage(amount, state, fromOwner) {
+  takeDamage(amount, state, fromOwner, opts) {
+    if (!(amount > 0)) return;
+    // 已死亡敌人不再结算：防止同帧多伤害源重复计分 / 重复击杀
+    if (!this.alive) return;
+    const o = opts || {};
+    const player = state ? state.player : null;
+    // 方向用实际攻击方向；未提供时退化为「玩家 → 敌人」
+    let dirX = (o.dirX != null) ? o.dirX : (player ? this.x - player.x : 1);
+    let dirY = (o.dirY != null) ? o.dirY : (player ? this.y - player.y : 0);
+    if (dirX === 0 && dirY === 0) { dirX = 1; dirY = 0; }
+    const crit = !!o.crit;
+
     // BOSS：扣共享血池 + 同步所有 BOSS hp；共享池 <= 0 全部死亡
     if (this.type === 'boss') {
       this.hitTimer = 0.12;
@@ -530,8 +554,10 @@ class Enemy {
           // 一次性结算 3 倍奖励
           state.player.addExp(this.exp * 3, state);
           if (state.player.overlord) state.player.damage += 3;
-          // 暗影爆破：仅流派 1（Shadow Echo）LV6+ 触发
-          if (state.genre === 0 && state.genreLv >= 6) ShadowExplosionManager.spawn(this.x, this.y, state);
+          // 暗影冲击：仅流派 0（Shadow Echo）LV6+ 触发（波内击杀由波自己连锁）
+          if (state.genre === 0 && state.genreLv >= 6 && !state._shadowWaveHit) {
+            ShadowExplosionManager.spawn(this.x, this.y, state);
+          }
           // 公共爆炸机制卡：敌人死亡时产生爆炸
           PublicBlastManager.onEnemyDeath(this.x, this.y, state);
           Particles.spawn(this.x, this.y, '#ff2030', 30, 200, 0.8);
@@ -545,6 +571,11 @@ class Enemy {
           UndyingManager.onEnemyDeath(this.x, this.y, state, this);
         }
         DeathShadowManager.spawn(this.x, this.y, state, this);
+        if (state) state.player.kills++; // BOSS 群体只计 1 次击杀
+        // 本局得分：共享血池归零时按本组实际生成的 BOSS 数量一次性结算（每只 500）
+        if (state) {
+          state.score = (state.score || 0) + bossList.length * (CONFIG.ENEMY_SCORE.boss || 0);
+        }
         EnemyManager._defeatedBossCount = (EnemyManager._defeatedBossCount || 0) + 1;
         // 无尽模式：清标记，等下一轮 BOSS 触发（60s 后再次出现）
         // 普通模式：置「已击败」标记，不再复活（否则 time≥90 恒成立会立刻重刷 BOSS）
@@ -553,6 +584,14 @@ class Enemy {
         } else {
           EnemyManager._bossDefeated = true;
         }
+        // 击杀反馈（BOSS 群体只计 1 次击杀 / 1 次顿帧 / 1 次震屏）
+        if (typeof CombatFeedback !== 'undefined') {
+          CombatFeedback.onKill(this, { crit: crit, nowMs: state ? state.time * 1000 : undefined });
+          CombatFeedback.gridWave(this.x, this.y, 220, 0.8);
+        }
+      } else if (typeof CombatFeedback !== 'undefined') {
+        // 未死亡：局部短闪 + 飘字（共享池 120ms 内合并）
+        CombatFeedback.onHit(this, { damage: amount, dirX, dirY, crit });
       }
       return;
     }
@@ -566,6 +605,11 @@ class Enemy {
     this.hp -= amount;
     this.hitTimer = 0.12;
 
+    // 统一命中反馈：闪白 / 击退 / 形变 / 火花 / 飘字
+    if (typeof CombatFeedback !== 'undefined') {
+      CombatFeedback.onHit(this, { damage: amount, dirX, dirY, crit, dot: !!o.dot });
+    }
+
     // 暗影冰封：玩家/暗影攻击累计 3 次触发（同一怪物 30s 内仅能触发一次）
     if (state && state.freezeEnabled && !this.alive) {
       // （hp 已 ≤ 0 时不再冻结，节省开销）
@@ -577,8 +621,7 @@ class Enemy {
         this.freezeLastTime  = now;
         this.freezeTimer     = 10;
         this.freezeSpeedMult = 0.1;  // 10 秒内移速 -90%
-        // 随机生成多面体顶点（不规则蓝色玻璃罩，3D 感）
-        if (!this.freezeVerts) this.freezeVerts = this._genIceVerts(this.radius * 1.25);
+        // 冰壳视觉由 IceShell 在下一帧读取 freezeTimer 后创建，不在此处生成几何
         // 因果残响：冰封触发视为 CONTROL 事件（可生成残响）
         if (state.genre === 3) EchoManager.onControl(this.x, this.y, this, state);
       }
@@ -589,6 +632,10 @@ class Enemy {
       this.alive = false;
       if (state) {
         state.player.addExp(this.exp, state);
+        // 击杀统计（真实死亡，每次只 +1；BOSS 群体在共享池分支单独结算）
+        state.player.kills++;
+        // 本局得分：按敌人类型固定基础分累加（与击杀数分开存储）
+        state.score = (state.score || 0) + this.scoreValue;
         // 吸血：击杀时按最大生命百分比回血（走统一恢复入口，可转护壳）
         if (state.player.lifesteal > 0) {
           const heal = Math.round(state.player.effectiveMaxHp * state.player.lifesteal);
@@ -600,8 +647,8 @@ class Enemy {
         if (state.player.overlord) {
           state.player.damage += 1;
         }
-        // LV6: 击杀时暗影爆破（仅流派 1 Shadow Echo 触发）
-        if (state.genre === 0 && state.genreLv >= 6) {
+        // Lv.6 击杀时暗影冲击（仅流派 0 Shadow Echo；波内击杀由波自己连锁，避免重复）
+        if (state.genre === 0 && state.genreLv >= 6 && !state._shadowWaveHit) {
           ShadowExplosionManager.spawn(this.x, this.y, state);
         }
         // 公共爆炸机制卡：敌人死亡时产生爆炸
@@ -616,7 +663,10 @@ class Enemy {
         UndyingManager.onEnemyDeath(this.x, this.y, state, this);
       }
       DeathShadowManager.spawn(this.x, this.y, state, this);
-      Particles.spawn(this.x, this.y, this.color || '#ff3060', 10, 100, 0.6);
+      // 击杀反馈（死亡碎片 / 顿帧 / 连击）
+      if (typeof CombatFeedback !== 'undefined') {
+        CombatFeedback.onKill(this, { crit, multi: !!o.multi, nowMs: state ? state.time * 1000 : undefined });
+      }
     }
   }
 }
@@ -695,6 +745,7 @@ const EnemyManager = {
       const e = this.enemies[i];
       e.update(dt, player, this.enemies, state);
       if (!e.alive) {
+        if (typeof IceShell !== 'undefined') IceShell.onEnemyDeath(e);
         this.enemies.splice(i, 1);
       } else if (e.type === 'boss') {
         bossList.push(e);

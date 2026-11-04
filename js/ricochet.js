@@ -842,9 +842,7 @@ const RicochetManager = {
     dmg = Math.round(dmg);
 
     // 直接碰撞：计入冰封有效命中（fromOwner 'player'）
-    enemy.takeDamage(dmg, state, 'player');
-    const sv = Utils.worldToScreen(enemy.x, enemy.y - 20, Renderer.cam);
-    Utils.spawnDmgNum(sv.x, sv.y, dmg, enemy.type === 'boss' ? 'boss' : (crit ? 'crit' : ''));
+    enemy.takeDamage(dmg, state, 'player', { crit });
     Particles.spawn(ball.x, ball.y, ball.chargedTag ? '#7de3ff' : '#c97bff', 5, 60, 0.4);
 
     // 导电碰撞：麻痹 + 局部电弧 + 消耗 1 次
@@ -934,9 +932,7 @@ const RicochetManager = {
       dmg = Math.round(dmg * cfg.CRIT_MULT);
     }
 
-    enemy.takeDamage(dmg, state, 'player');
-    const sv = Utils.worldToScreen(enemy.x, enemy.y - 20, Renderer.cam);
-    Utils.spawnDmgNum(sv.x, sv.y, dmg, enemy.type === 'boss' ? 'boss' : (crit ? 'crit' : ''));
+    enemy.takeDamage(dmg, state, 'player', { crit });
     // 麻痹（直接碰撞附带）
     enemy.applyStun(cfgT.paralyzeDuration);
     Particles.spawn(ball.x, ball.y, '#7de3ff', 6, 80, 0.35);
@@ -1000,7 +996,6 @@ const RicochetManager = {
       nearest.takeDamage(dmg, state, RICOCHET_DERIVED_OWNER);
       nearest.applyStun(cfgT.paralyzeDuration);
       const sv = Utils.worldToScreen(nearest.x, nearest.y - 20, Renderer.cam);
-      Utils.spawnDmgNum(sv.x, sv.y, dmg);
       this._addFx('arc', ball.x, ball.y, Math.atan2(nearest.y - ball.y, nearest.x - ball.x),
         0.25, '#9fe8ff', rr);
     }
@@ -1036,7 +1031,6 @@ const RicochetManager = {
     const dmg = Math.round(baseDmg * mult);
     nearest.takeDamage(dmg, state, RICOCHET_DERIVED_OWNER);
     const sv = Utils.worldToScreen(nearest.x, nearest.y - 20, Renderer.cam);
-    Utils.spawnDmgNum(sv.x, sv.y, dmg);
     this._addFx('arc', target.x, target.y,
       Math.atan2(nearest.y - target.y, nearest.x - target.x), 0.22, '#7de3ff', radius);
     Particles.spawn(nearest.x, nearest.y, '#7de3ff', 3, 60, 0.3);
@@ -1063,7 +1057,6 @@ const RicochetManager = {
     nearest.takeDamage(dmg, state, RICOCHET_DERIVED_OWNER);
     nearest.applyStun(cfgO.arcParalyzeDuration);
     const sv = Utils.worldToScreen(nearest.x, nearest.y - 20, Renderer.cam);
-    Utils.spawnDmgNum(sv.x, sv.y, dmg);
     this._addFx('arc', target.x, target.y,
       Math.atan2(nearest.y - target.y, nearest.x - target.x), 0.22, '#9d68ff', radius);
     Particles.spawn(nearest.x, nearest.y, '#9fe8ff', 3, 60, 0.3);
@@ -1127,7 +1120,6 @@ const RicochetManager = {
           e.takeDamage(dmg, state, RICOCHET_DERIVED_OWNER);
           e.applyStun(f.paralyze);
           const sv = Utils.worldToScreen(e.x, e.y - 20, Renderer.cam);
-          Utils.spawnDmgNum(sv.x, sv.y, dmg, e.type === 'boss' ? 'boss' : '');
           // 局部电弧向场内目标跳动（视觉）
           this._addFx('arc', f.x, f.y, Math.atan2(dy, dx), 0.18, '#7de3ff', f.radius * 0.6);
         }
@@ -1248,7 +1240,6 @@ const RicochetManager = {
       }
       e.takeDamage(round, state, RICOCHET_DERIVED_OWNER);
       const sv = Utils.worldToScreen(e.x, e.y - 20, Renderer.cam);
-      Utils.spawnDmgNum(sv.x, sv.y, round, e.type === 'boss' ? 'boss' : '');
     }
     Particles.spawn(x, y, '#7de3ff', 8, 110, 0.45);
   },

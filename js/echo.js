@@ -1109,9 +1109,7 @@ const EchoManager = {
     if (!this._canAffect(enemy, type, state)) return false;
     let amount = dmg;
     if (enemy.type === 'boss') amount *= CAUSAL_RULES.ruptureBossMultiplier;
-    enemy.takeDamage(amount, state, 'echo');
-    const sv = Utils.worldToScreen(enemy.x, enemy.y - 20, Renderer.cam);
-    Utils.spawnDmgNum(sv.x, sv.y, amount, enemy.type === 'boss' ? 'boss' : (crit ? 'crit' : ''));
+    enemy.takeDamage(amount, state, 'echo', { crit });
     Particles.spawn(enemy.x, enemy.y, crit ? '#35f0ff' : '#b04cff', 4, 50, 0.3);
     // 记录敌人最近的公共机制标签（LV7 死亡回响节点继承用；绝不继承 KILL）
     if (type === 'CONTROL' || type === 'FREEZE' || type === 'EXPLOSION' ||

@@ -220,8 +220,6 @@ const UndyingManager = {
       hits++;
       // 冻壳剥离：命中已冰封敌人（每次冰封期间每目标一次）
       this._tryShatter(e, dmg, state);
-      const sv = Utils.worldToScreen(e.x, e.y - 20, Renderer.cam);
-      Utils.spawnDmgNum(sv.x, sv.y, Math.round(dmg), e.type === 'boss' ? 'boss' : '');
     }
 
     // 主冲击扫过遗蜕（快照：新遗蜕不被本次冲击再次引爆）
@@ -270,8 +268,6 @@ const UndyingManager = {
       if (dx * dx + dy * dy > rr * rr) continue;
       if (e.type === 'boss') { if (bossHit) continue; bossHit = true; }
       e.takeDamage(dmg, state, 'player');
-      const sv = Utils.worldToScreen(e.x, e.y - 20, Renderer.cam);
-      Utils.spawnDmgNum(sv.x, sv.y, Math.round(dmg), e.type === 'boss' ? 'boss' : '');
     }
     // 向玩家方向收集范围内余烬
     const p = state.player;
@@ -304,8 +300,6 @@ const UndyingManager = {
       if (ddx * ddx + ddy * ddy > rr * rr) continue;
       if (e.type === 'boss') { if (bossHit) continue; bossHit = true; }
       e.takeDamage(dmg, state, 'player');
-      const sv = Utils.worldToScreen(e.x, e.y - 20, Renderer.cam);
-      Utils.spawnDmgNum(sv.x, sv.y, Math.round(dmg), e.type === 'boss' ? 'boss' : '');
     }
     this._pushFx('petal', x, y, { life: 0.35, angle, len, half });
   },
@@ -333,8 +327,6 @@ const UndyingManager = {
     // 额外局部冰裂伤害（来源为主冲击伤害，不引用不存在的冰封基础伤害）
     const crack = mainDmg * cfg.SHATTER_DMG_MULT;
     e.takeDamage(crack, state, 'player');
-    const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
-    Utils.spawnDmgNum(sv.x, sv.y, Math.round(crack), 'crit');
     Particles.spawn(e.x, e.y, '#dff2ff', 8, 120, 0.45);
     this._pushFx('shard', e.x, e.y, { life: 0.4, tx: state.player.x, ty: state.player.y });
   },
@@ -399,8 +391,6 @@ const UndyingManager = {
       if (dx * dx + dy * dy > rr * rr) continue;
       if (e.type === 'boss') { if (bossHit) continue; bossHit = true; }
       e.takeDamage(crackDmg, state, 'player');
-      const sv = Utils.worldToScreen(e.x, e.y - 20, Renderer.cam);
-      Utils.spawnDmgNum(sv.x, sv.y, Math.round(crackDmg), e.type === 'boss' ? 'boss' : '');
     }
     // 小型侧向碎壳喷发（与主冲击视觉区分）
     this._pushFx('crack', h.x, h.y, { life: 0.35, radius });
@@ -444,8 +434,6 @@ const UndyingManager = {
         e.takeDamage(CONFIG.LINK_DAMAGE, state, 'shadow');
         // 连线伤害积累一份汲取收益（走统一恢复入口 → 转护壳）
         player.heal(player.effectiveMaxHp * CONFIG.UNDYING.LEECH_HP_PCT, state);
-        const sv = Utils.worldToScreen(e.x, e.y - 16, Renderer.cam);
-        Utils.spawnDmgNum(sv.x, sv.y, CONFIG.LINK_DAMAGE);
         Particles.spawn(e.x, e.y, '#ff5a3c', 4, 50, 0.3);
       }
     }
@@ -469,8 +457,6 @@ const UndyingManager = {
         if (ShadowLink._distToSegmentSq(e, p, se, dx, dy, lenSq) >= (e.radius + 12) * (e.radius + 12)) continue;
         if (e.type === 'boss') { if (bossHit) continue; bossHit = true; }
         e.takeDamage(dmg, state, 'player');
-        const sv = Utils.worldToScreen(e.x, e.y - 20, Renderer.cam);
-        Utils.spawnDmgNum(sv.x, sv.y, Math.round(dmg), e.type === 'boss' ? 'boss' : '');
       }
       this._pushFx('cord', p.x, p.y, { life: 0.3, tx: se.x, ty: se.y });
       // 端点遗蜕引爆（_detonateHusk 内 indexOf 保证只结算一次）

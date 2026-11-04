@@ -100,7 +100,7 @@ const BulletManager = {
             crit = EchoManager.rollCrit();
             if (crit) dmg = Math.round(dmg * CONFIG.CAUSAL.CRIT_MULT);
           }
-          hitE.takeDamage(dmg, state, b.owner);
+          hitE.takeDamage(dmg, state, b.owner, { dirX: b.vx, dirY: b.vy, crit });
           // 不灭的暗影（流派 2）：玩家直接攻击造成有效伤害 → 基础汲取（批次限频）
           if (state.genre === 2 && b.owner === 'player' && typeof UndyingManager !== 'undefined') {
             UndyingManager.onPlayerHit(b.batchId, state);
@@ -109,12 +109,6 @@ const BulletManager = {
           if (b.owner === 'player') {
             EchoManager.onHit(b.x, b.y, b.angle, dmg, hitE, !hitE.alive, state, crit);
           }
-          // spawn particles
-          Particles.spawn(b.x, b.y,
-            b.owner === 'shadow' ? '#aa44ff' : '#c97bff', 5, 60, 0.4);
-          // screen damage number
-          const sv = Utils.worldToScreen(hitE.x, hitE.y - 20, Renderer.cam);
-          Utils.spawnDmgNum(sv.x, sv.y, dmg, hitE.type === 'boss' ? 'boss' : (crit ? 'crit' : ''));
           // 穿透（通用 BUFF「暗影贯穿」）：一发可命中多个目标 / 经过多个因果节点，
           // 穿透后伤害衰减；同一子弹不重复命中同一敌人
           if (b.pierce > 0 && b.owner === 'player') {
