@@ -3,7 +3,7 @@
 //   · 左侧倾斜像素数字 + 较小 COMBO 标签
 //   · 紫色到浅紫白的分层渐变、亮色顶边、深色底边、暗紫描边与阴影
 //   · 入场短促速度线 / 残影 / 局部白色高光与星光
-//   · 底部三秒真实剩余时间条
+//   · 底部一秒真实剩余时间条
 // 与官方 1.45s 一次性演示不同：这里由真实击杀状态驱动，动画与计时分开管理。
 // 所有计时使用游戏时间（暂停 / 选卡 / 顿帧时自动冻结），不使用 setTimeout。
 
@@ -403,7 +403,8 @@
   const BS = 4, LS = 2;               // 数字 / 标签像素倍率
   const ENTRY_DUR = 0.18, ENTRY_HIT = 0.10, EXIT_DUR = 0.20;
   const PULSE_MIN_MS = 110;           // 更新脉冲视觉限频（不影响真实计数）
-  const TIMEOUT_MS = 3000;
+  // 与 CombatFeedback 共用同一连击窗口，避免计时条与真实断连时间不一致
+  const TIMEOUT_MS = (typeof COMBAT_FX !== 'undefined' && COMBAT_FX.combo && COMBAT_FX.combo.timeoutMs) || 1000;
 
   function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
   function easeInQuad(t) { return t * t; }

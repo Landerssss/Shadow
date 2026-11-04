@@ -353,7 +353,7 @@ const Game = {
       }
     }
 
-    // 引雷地面层（预警圈 / 雷区电弧 / 裂光 / 焦痕；画在敌人之下，不遮挡战场）
+    // 引雷地面层（低亮预警断裂圈 / 俯视雷区边界 / 冷蓝裂光；画在敌人之下，不遮挡战场）
     SkyThunderManager.renderSkyThunderStrikes(ctx, cam, state, 'ground');
 
     // 不息的暗影（流派 4）：磁极残核 / 电磁场 / 范围特效（地面层，敌人之下）
@@ -486,7 +486,7 @@ const Game = {
     // Ambient particles（后半层雪花已在敌人之前绘制）
     Renderer.drawParticles(Particles.list, false);
 
-    // 引雷空中层（暗云 / 巨大雷柱 / 分叉 / 落地闪光；加亮绘制不遮挡敌人，反馈低于白蚀爆裂）
+    // 引雷空中层（细长蓝白雷电 / 分叉 / 接地电火花 / 麻痹局部电弧；不遮挡敌人、无全屏闪光）
     SkyThunderManager.renderSkyThunderStrikes(ctx, cam, state, 'air');
 
     // 暗影爆炸（最顶层，置顶所有元素之上）

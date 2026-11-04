@@ -1,8 +1,12 @@
 // ─── SKY THUNDER（引雷 · 公共机制卡「引雷」）────────────────────────────────
 // 与流派 1 的漩涡电（VortexManager.lightnings / Renderer.drawVortexLightning）
 // 完全分离的机制与视觉语言：
-//   引雷   = 天空、垂直、巨大雷柱、落点、持续雷区、麻痹（本文件）
+//   引雷   = 天空、细长蓝白折线雷电、落点、俯视雷区、局部麻痹电弧（本文件）
 //   漩涡电 = 局部、随机、围绕漩涡、短促细小放电（vortex.js，保持原样）
+//
+// 视觉参考：pixelfx moves/lightning-call → lightning/lightning-strike → lightning/_lib
+// 只提取底层雷击：曲折主干、白核、电蓝外缘、细叉、接地电火花；
+// 不引入施法/受击角色、横版地面、火光余烬、演示镜头与顿帧。
 //
 // 战斗流程（每 4 秒开始一个批次）：
 //   批次数量 = min(6, 2 + floor(玩家等级 / 5))，逐道落地（实际间隔 550ms，硬性 ≥500ms）
@@ -43,12 +47,34 @@ const SKY_THUNDER_CONFIG = {
 
 // ─── 屏幕反馈限制（引雷不得压过白蚀爆裂）──────────────────────────────────
 const SKY_THUNDER_FEEDBACK = {
-  strikeFlashAlpha: 0.05,    // 落地闪光透明度上限（≤ 0.06）
-  strikeFlashDuration: 45,   // 落地闪光时长（ms）
-  strikeCameraShake: 0.35,   // 落地震屏强度上限
+  strikeFlashAlpha: 0,       // 全屏落地闪光已关闭：冲击只由细雷电 / 接地点 / 电火花表达
+  strikeFlashDuration: 0,
+  strikeCameraShake: 0.35,   // 沿用既有落地震屏上限（总偏移仍受 2px 硬上限约束）
   tickFlashAlpha: 0,         // 雷区 tick 不闪屏
   tickCameraShake: 0,        // 雷区 tick 不震屏
   priority: 1,               // 反馈优先级（白蚀爆裂最高）
+};
+
+// 引雷专用视觉参数：雷电宽度、分叉长度与地面范围彼此独立，不随雷区半径等比放大
+const SKY_THUNDER_VIS = {
+  boltTop: -24,              // 空中雷电起点（屏幕上方）
+  trunkAmp: 17,              // 主干首次折线摆幅（px）
+  trunkDepth: 4,             // 折线细分层数（17 个节点）
+  forksMin: 3,
+  forksMax: 4,
+  glowWidth: 10,             // 蓝紫外晕（px，低透明度）
+  glowColor: 'rgba(92, 72, 255, 0.10)',
+  outerWidth: 4.6,           // 电蓝外缘
+  outerColor: 'rgba(78, 150, 255, 0.52)',
+  bodyWidth: 3.0,            // 蓝色主体
+  bodyColor: 'rgba(150, 220, 255, 0.88)',
+  coreWidth: 1.25,           // 白色细核心
+  forkWidth: 1.9,
+  forkColor: 'rgba(150, 215, 255, 0.66)',
+  forkCoreWidth: 0.8,
+  warnSegments: 8,
+  activeSegments: 10,
+  edgeArcs: 5,
 };
 
 // ─── 因果残响兼容规则（防雷区 tick 无限刷因果节点）────────────────────────
@@ -75,9 +101,7 @@ const SKY_THUNDER_EVENT = {
 
 const SkyThunderManager = {
   zones: [],         // 活跃雷区（warning → strike → active → fade）
-  scorch: [],        // 地面焦痕残留（纯视觉）
   reservations: [],  // 普通敌人区域预约（持续到目标真实死亡）
-  flash: 0,          // 屏幕闪光（≤ strikeFlashAlpha）
   shake: 0,          // 震屏强度（≤ strikeCameraShake，快速衰减）
 
   _nextId: 1,
@@ -85,7 +109,7 @@ const SkyThunderManager = {
   _hitThisFrame: new Set(),  // 同一敌人同一帧最多接受一次引雷伤害
   _paraGlobal: new Map(),    // 全局麻痹刷新记录（防多雷区永久麻痹）
   _paraEventCd: new Map(),   // 同目标 PARALYZE 事件冷却
-  _mergeBuf: [],             // 渲染合并缓冲（45px 内雷区合并视觉）
+  _paraVisual: new Map(),    // 引雷麻痹视觉（enemyId → { until, seed }），只影响渲染
   _enBuf: [],                // 敌人快照缓冲
 
   // ── 数量成长：读取玩家等级（非流派等级/波次/无尽轮次）──────────────────
@@ -125,7 +149,7 @@ const SkyThunderManager = {
     const target = this._pickStrikeTarget(state, radius);
     if (!target) return false;
 
-    this._pushZone(target.x, target.y, radius, cfg.damagePerTarget, 1, state, {
+    this._pushZone(target.x, target.y, radius, cfg.damagePerTarget, state, {
       batchId,
       targetId: target.id,
       isBoss: target.type === 'boss',
@@ -213,7 +237,7 @@ const SkyThunderManager = {
     return null;
   },
 
-  _pushZone(x, y, radius, damage, visualScale, state, opts) {
+  _pushZone(x, y, radius, damage, state, opts) {
     const cfg = SKY_THUNDER_CONFIG;
     const o = opts || {};
     // 超出上限：优先回收已落地且剩余时间最短的雷区，绝不淘汰未落地预警
@@ -234,7 +258,6 @@ const SkyThunderManager = {
       x, y,
       radius,
       damage,
-      visualScale,
       state: 'warning',
       createdAt: state.time,
       elapsed: 0,
@@ -256,16 +279,16 @@ const SkyThunderManager = {
       targetId: (o.targetId != null) ? o.targetId : -1,
       isBoss: !!o.isBoss,
       reservationId: -1,
-      // 视觉
+      // 视觉：路径在创建时一次性生成，strike 期间只切换预计算变体与亮度
       seed,
-      bolt: null,
+      boltPaths: null,
       branches: null,
-      boltTimer: 0,
       struck: false,
       impactT: 1,
       tickFlash: 0,
       miniT: 0.3 + Math.random() * 0.3,
       miniLife: 0,
+      miniAngle: Math.random() * Math.PI * 2,
     };
     this._genBolt(z);
 
@@ -292,8 +315,7 @@ const SkyThunderManager = {
     const tickSec = SKY_THUNDER_CONFIG.tickInterval / 1000;
     // 同帧伤害限制每帧清零
     this._hitThisFrame.clear();
-    // 屏幕反馈衰减（同一帧最多一次屏幕级反馈：flash 取最大值合并）
-    if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * (0.05 / (SKY_THUNDER_FEEDBACK.strikeFlashDuration / 1000)));
+    // 仅保留既有落地震屏衰减；全屏闪光已关闭
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 4);
 
     for (let i = this.zones.length - 1; i >= 0; i--) {
@@ -308,17 +330,13 @@ const SkyThunderManager = {
       if (z.state === 'warning') {
         // 预警：不伤害、不麻痹、不触发因果；仅视觉蓄力
       } else if (z.state === 'strike') {
-        // 雷柱分叉随下降变化（每 45ms 重生成折线）
-        z.boltTimer -= dt;
-        if (z.boltTimer <= 0) { z.boltTimer = 0.045; this._genBolt(z); }
-        // 落地瞬间：一次性初始伤害 + 屏幕反馈 + 因果 STRIKE（只结算一次）
+        // 落地瞬间：一次性初始伤害 + 因果 STRIKE（只结算一次）
         if (!z.struck && t >= 0.55) {
           z.struck = true;
           z.impactT = 0;
           this.emitSkyThunderEvent(z, SKY_THUNDER_EVENT.STRIKE, null, state);
           this._strikeImpact(z, state);
         }
-        if (z.impactT < 1) z.impactT = Math.min(1, z.impactT + dt / 0.25);
       } else if (z.state === 'active') {
         // 雷区 tick：伤害 + 麻痹（tickInterval 一次）
         z.tickTimer += dt;
@@ -327,20 +345,20 @@ const SkyThunderManager = {
           z.tickIndex++;
           this._zoneTick(z, state);
         }
-        // 上窜小雷柱节奏
+        // 地面电弧间歇跳动（只换位置与相位，不重播天空落雷）
         z.miniT -= dt;
-        if (z.miniT <= 0) { z.miniT = 0.35 + Math.random() * 0.35; z.miniLife = 0.09; }
+        if (z.miniT <= 0) {
+          z.miniT = 0.32 + Math.random() * 0.38;
+          z.miniLife = 0.10;
+          z.miniAngle = Math.random() * Math.PI * 2;
+        }
         if (z.miniLife > 0) z.miniLife -= dt;
         if (z.tickFlash > 0) z.tickFlash = Math.max(0, z.tickFlash - dt * 6);
       } else if (z.state === 'fade') {
         // 消散：不再造成伤害
       }
-    }
-
-    // 焦痕残留衰减
-    for (let i = this.scorch.length - 1; i >= 0; i--) {
-      this.scorch[i].life -= dt;
-      if (this.scorch[i].life <= 0) this.scorch.splice(i, 1);
+      // 接地余晖计时（视觉；雷区 tick / 伤害节奏不受影响）
+      if (z.struck && z.impactT < 1) z.impactT = Math.min(1, z.impactT + dt / 0.25);
     }
 
     // 预约有效性：目标真实死亡 / 合法移除时释放（雷区消散不释放预约）
@@ -371,11 +389,8 @@ const SkyThunderManager = {
       z.duration = cfg.fadeDuration / 1000;
       this.emitSkyThunderEvent(z, SKY_THUNDER_EVENT.ZONE_END, null, state);
     } else {
-      // fade 结束：留下短暂焦痕后回收
+      // fade 结束：冷蓝余光已在 fade 阶段内衰减完，不留下灼烧/焦痕
       z.consumed = true;
-      if (this.scorch.length < 16) {
-        this.scorch.push({ x: z.x, y: z.y, radius: z.radius, life: 0.5, maxLife: 0.5 });
-      }
     }
   },
 
@@ -413,12 +428,11 @@ const SkyThunderManager = {
     if (typeof PublicLightningManager !== 'undefined' && z.batchId) {
       PublicLightningManager.onActualStrike(z.batchId, state ? state.time : 0);
     }
-    // 屏幕反馈（同帧多次落地合并为一次；强度低于白蚀爆裂）
-    this.flash = Math.max(this.flash, SKY_THUNDER_FEEDBACK.strikeFlashAlpha);
+    // 屏幕反馈：全屏闪光关闭，只保留既有小震屏
     this.shake = Math.max(this.shake, SKY_THUNDER_FEEDBACK.strikeCameraShake);
-    // 落地粒子（少量，不喧宾夺主）
-    Particles.spawn(z.x, z.y, '#bfe6ff', 10, 150, 0.4);
-    Particles.spawn(z.x, z.y, '#7df9ff', 6, 110, 0.5);
+    // 接地电火花（少量蓝白，无火光/余烬）
+    Particles.spawn(z.x, z.y, '#cfeeff', 7, 180, 0.32, [1, 2.2]);
+    Particles.spawn(z.x, z.y, '#7cc8ff', 4, 120, 0.4, [1, 1.8]);
   },
 
   // ── 雷区 tick：轻微伤害 + 麻痹（渲染层绝不调用）──────────────────────────
@@ -504,6 +518,11 @@ const SkyThunderManager = {
     this._paraGlobal.set(enemy.id, now);
     // 复用现有控制入口：applyStun 只刷新剩余时间，绝不叠加、不覆盖速度字段
     enemy.applyStun(cfg.paralyzeDuration / 1000);
+    // 引雷专用麻痹视觉：只记录到期时间与相位，不改敌人位置/碰撞/硬直
+    this._paraVisual.set(enemy.id, {
+      until: now + cfg.paralyzeDuration / 1000,
+      seed: (enemy.id * 131 + zone.id * 17) % 997,
+    });
     // 因果：PARALYZE 事件（CONTROL/PARALYZE 类，不计 LIGHTNING、不创建节点）
     const lastEvt = this._paraEventCd.get(enemy.id);
     if (lastEvt == null ||
@@ -538,242 +557,245 @@ const SkyThunderManager = {
   // ── 渲染（渲染层绝不造成伤害；ground 在敌人之下 / air 在敌人之上）────────
   renderSkyThunderStrikes(ctx, cam, state, pass) {
     if (pass === 'ground') {
-      if (this.zones.length === 0 && this.scorch.length === 0) return;
+      if (this.zones.length === 0) return;
       this._renderGround(ctx, cam, state ? state.time : 0);
     } else {
-      if (this.zones.length === 0 && this.flash <= 0.001) return;
+      if (this.zones.length === 0 && this._paraVisual.size === 0) return;
       this._renderAir(ctx, cam, state ? state.time : 0);
     }
   },
 
-  // ── 地面层：焦痕 / 预警圈 / 雷区边界 / 上窜小雷 / 敌人周围电弧 ────────────
+  // ── 地面层：预警断裂圈 / 接地电弧 / 俯视雷区边界 / 消散电痕 ───────────────
   _renderGround(ctx, cam, time) {
-    const merge = this._mergeBuf;
-    merge.length = 0;
-
-    // 焦痕（最底层残留）
-    for (const s of this.scorch) {
-      const sv = Utils.worldToScreen(s.x, s.y, cam);
-      const a = 0.22 * (s.life / s.maxLife);
-      Renderer._drawGlow(sv.x, sv.y, s.radius * 0.7, '#2b5cff', a);
-    }
-
     for (const z of this.zones) {
       const sv = Utils.worldToScreen(z.x, z.y, cam);
-      if (!Utils.isOnScreen(z.x, z.y, cam, z.radius + 60)) continue;
+      if (!Utils.isOnScreen(z.x, z.y, cam, z.radius + 40)) continue;
       const t = (z.duration > 0) ? Math.min(1, z.elapsed / z.duration) : 1;
-
-      // 45px 内雷区合并视觉：只画一枚边界环，伤害互不影响
-      let merged = false;
-      for (let i = 0; i < merge.length; i += 2) {
-        const dx = merge[i] - sv.x, dy = merge[i + 1] - sv.y;
-        if (dx * dx + dy * dy < 45 * 45) { merged = true; break; }
-      }
-
       if (z.state === 'warning') {
-        this._drawWarnRing(ctx, sv, z, t, merged);
+        this._drawWarnRing(ctx, sv, z, t);
       } else if (z.state === 'strike') {
-        this._drawGroundImpact(ctx, sv, z, t, merged);
+        this._drawGroundStrike(ctx, sv, z, t);
       } else if (z.state === 'active') {
-        if (!merged) merge.push(sv.x, sv.y);
-        this._drawZoneGround(ctx, sv, z, t, merged);
+        this._drawZoneGround(ctx, sv, z, t);
       } else if (z.state === 'fade') {
-        if (!merged) merge.push(sv.x, sv.y);
-        this._drawZoneFade(ctx, sv, z, t, merged);
+        this._drawZoneFade(ctx, sv, z, t);
       }
     }
   },
 
-  // 阶段 1：地面预警（断裂圆弧 + 不规则电纹，逐渐变亮；不造成伤害）
-  _drawWarnRing(ctx, sv, z, t, merged) {
-    const r = z.radius * (0.86 + 0.14 * t);
-    ctx.save();
-    if (!merged) {
-      // 断裂圆弧（4 段弧 + 缺口）
-      ctx.lineCap = 'round';
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = '#6ab8ff';
-      ctx.globalAlpha = 0.18 + 0.5 * t;
-      for (let k = 0; k < 4; k++) {
-        const a0 = z.seed + k * (Math.PI / 2) + t * 0.4;
-        ctx.beginPath();
-        ctx.arc(sv.x, sv.y, r, a0, a0 + Math.PI / 2 * 0.72);
-        ctx.stroke();
-      }
-      // 不规则电纹（沿环的短锯齿）
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#9fd8ff';
-      ctx.globalAlpha = 0.12 + 0.35 * t;
-      for (let k = 0; k < 8; k++) {
-        const a = z.seed * 1.7 + k * (Math.PI / 4) + timeJitter(z, k);
-        const jr = r + Utils.rand(-6, 6);
-        const x0 = sv.x + Math.cos(a) * jr, y0 = sv.y + Math.sin(a) * jr;
-        const x1 = x0 + Utils.rand(-10, 10), y1 = y0 + Utils.rand(-10, 10);
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-        ctx.stroke();
-      }
+  // 落地前仍显示蓄力圈；接地后才出现冷蓝裂光与电火花
+  _drawGroundStrike(ctx, sv, z, t) {
+    if (!z.struck) {
+      this._drawWarnRing(ctx, sv, z, 1, 0.35);
+      return;
     }
-    // 地面蓄力光
-    Renderer._drawGlow(sv.x, sv.y, r * 0.9, '#4aa8ff', 0.05 + 0.14 * t);
-    ctx.restore();
-
-    function timeJitter(z, k) {
-      return Math.sin(z.seed + k * 2.1 + z.elapsed * 24) * 0.12;
-    }
+    this._drawGroundImpact(ctx, sv, z, t);
   },
 
-  // 阶段 2：落地冲击（裂光 + 冲击波环 + 飞溅电弧）
-  _drawGroundImpact(ctx, sv, z, t, merged) {
-    const dec = 1 - t;
+  // 阶段 1：俯视预警（低亮度蓝紫断裂圈 + 少量向心电纹；不压暗屏幕、不提前伤害）
+  _drawWarnRing(ctx, sv, z, t, boost = 0) {
+    const V = SKY_THUNDER_VIS;
+    const flick = this._timeBucket(z.elapsed);
+    const r = z.radius + Math.sin(z.elapsed * 6 + z.seed) * 1.5;
     ctx.save();
-    // 地面裂光（不规则放射）
-    const cracks = 7;
     ctx.lineCap = 'round';
-    for (let k = 0; k < cracks; k++) {
-      const a = z.seed * 2.3 + k * (Math.PI * 2 / cracks);
-      const len = z.radius * (0.55 + 0.5 * ((k * 37 % 10) / 10));
-      ctx.strokeStyle = (k % 2 === 0) ? '#dff4ff' : '#6ab8ff';
-      ctx.globalAlpha = 0.55 * dec;
-      ctx.lineWidth = 2.5;
+    // 近圆形断裂圈：固定 8 段，段间留缺口
+    for (let k = 0; k < V.warnSegments; k++) {
+      const gap = (Math.PI * 2 / V.warnSegments);
+      const a0 = z.seed + k * gap + 0.08;
+      const a1 = a0 + gap * (0.52 + 0.18 * this._seedRand(z.seed + flick, k));
+      const col = k % 2 === 0 ? '#7c5cff' : '#5fa8ff';
+      this._jagArc(
+        ctx, sv.x, sv.y, r, a0, a1,
+        z.seed + flick * 13 + k * 5, 3.2,
+        col, 1.5,
+        (0.16 + 0.38 * t + boost) * (0.75 + 0.25 * this._seedRand(z.seed, k + 30))
+      );
+    }
+    // 少量电纹向中心聚集（不从中心向外铺）
+    ctx.globalAlpha = 0.10 + 0.20 * t;
+    ctx.strokeStyle = '#8f7cff';
+    ctx.lineWidth = 1;
+    for (let k = 0; k < 5; k++) {
+      const a = z.seed * 1.7 + k * (Math.PI * 2 / 5) + 0.3;
+      const x0 = sv.x + Math.cos(a) * r * 0.82;
+      const y0 = sv.y + Math.sin(a) * r * 0.82;
+      const x1 = sv.x + Math.cos(a + 0.18) * r * 0.20;
+      const y1 = sv.y + Math.sin(a + 0.18) * r * 0.20;
+      const mx = (x0 + x1) / 2 + (this._seedRand(z.seed + flick, k + 50) - 0.5) * 14;
+      const my = (y0 + y1) / 2 + (this._seedRand(z.seed + flick, k + 70) - 0.5) * 14;
       ctx.beginPath();
-      let px = sv.x, py = sv.y;
-      const segs = 3;
-      for (let s = 1; s <= segs; s++) {
-        const rr = len * s / segs;
-        px = sv.x + Math.cos(a + Math.sin(z.seed + k + s) * 0.25) * rr;
-        py = sv.y + Math.sin(a + Math.sin(z.seed + k + s) * 0.25) * rr;
-        ctx.lineTo(px, py);
-      }
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(mx, my);
+      ctx.lineTo(x1, y1);
       ctx.stroke();
     }
-    // 冲击波细环（快速扩张）
-    if (!merged && t < 0.8) {
-      const rr = z.radius * (0.5 + t * 0.85);
-      ctx.globalAlpha = 0.5 * (1 - t);
-      ctx.strokeStyle = '#bfe6ff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(sv.x, sv.y, rr, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    // 极低亮度中心蓄力点（中央保持通透）
+    ctx.globalAlpha = 1;
+    Renderer._drawGlow(sv.x, sv.y, 8, '#6a5cff', 0.05 + 0.08 * t);
     ctx.restore();
-    // 白蓝落地闪光（局部，不遮挡敌人）
-    Renderer._drawGlow(sv.x, sv.y, z.radius * 1.15, '#cfe8ff', 0.5 * dec * (1 - z.impactT));
   },
 
-  // 阶段 3：持续雷区（断裂电弧边界 / 边缘跳跃 / tick 闪烁 / 上窜小雷 / 敌人电弧）
-  _drawZoneGround(ctx, sv, z, t, merged) {
+  // 阶段 2：接地冲击（细电弧向四周炸开 + 很小的蓝白接地点；无火光/余烬）
+  _drawGroundImpact(ctx, sv, z, t) {
+    const k = this._clamp01((t - 0.55) / 0.45);
+    const dec = 1 - k;
+    const flick = this._timeBucket(z.elapsed + 0.13);
     ctx.save();
-    if (!merged) {
-      // 断裂电弧边界（不使用漩涡圆盘、不旋转吸附）
-      ctx.lineCap = 'round';
-      ctx.lineWidth = 2;
-      for (let k = 0; k < 6; k++) {
-        const a0 = z.seed * 1.3 + k * (Math.PI / 3) + t * 0.25;
-        ctx.strokeStyle = (k % 2 === 0) ? '#7df9ff' : '#4aa8ff';
-        ctx.globalAlpha = 0.34;
-        ctx.beginPath();
-        ctx.arc(sv.x, sv.y, z.radius, a0, a0 + Math.PI / 3 * 0.55);
-        ctx.stroke();
-      }
-      // 边缘低频电弧跳跃（短锯齿）
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#9fd8ff';
-      ctx.globalAlpha = 0.3;
-      for (let k = 0; k < 3; k++) {
-        const a = z.seed + k * 2.1 + t * 3.2;
-        const x0 = sv.x + Math.cos(a) * z.radius, y0 = sv.y + Math.sin(a) * z.radius;
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x0 + Utils.rand(-12, 12), y0 + Utils.rand(-12, 12));
-        ctx.lineTo(x0 + Utils.rand(-16, 16), y0 + Utils.rand(-16, 16));
-        ctx.stroke();
-      }
-    }
-    // tick 局部闪烁（不做全屏白闪）
-    if (z.tickFlash > 0.01) {
-      Renderer._drawGlow(sv.x, sv.y, z.radius * 0.6, '#8fd0ff', 0.22 * z.tickFlash);
-    }
-    // 中心偶尔上窜短雷柱
-    if (z.miniLife > 0) {
-      const mh = 34 + (z.id * 13 % 26);
-      ctx.globalAlpha = 0.75 * (z.miniLife / 0.09);
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#dff4ff';
-      ctx.beginPath();
-      ctx.moveTo(sv.x, sv.y);
+    ctx.lineCap = 'round';
+    // 短裂光：近圆分布，长度固定上限，不随雷区半径拉成长星
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      const a = z.seed * 2.1 + i * (Math.PI * 2 / n) +
+        (this._seedRand(z.seed + flick, i) - 0.5) * 0.25;
+      const len = 16 + this._seedRand(z.seed, i + 20) * 38;
+      const pts = [[0, 0]];
+      let x = 0, y = 0;
       for (let s = 1; s <= 3; s++) {
-        ctx.lineTo(sv.x + Utils.rand(-7, 7), sv.y - mh * s / 3);
+        x += Math.cos(a) * len / 3 + (this._seedRand(z.seed + flick, i * 7 + s) - 0.5) * 9;
+        y += Math.sin(a) * len / 3 + (this._seedRand(z.seed + flick, i * 7 + s + 40) - 0.5) * 9;
+        pts.push([x, y]);
       }
-      ctx.stroke();
-      ctx.lineWidth = 7;
-      ctx.strokeStyle = 'rgba(110,180,255,0.35)';
-      ctx.stroke();
+      this._strokePolyline(ctx, pts, sv.x, sv.y, 'rgba(105,78,255,0.16)', 5.5, 0.60 * dec);
+      this._strokePolyline(ctx, pts, sv.x, sv.y, 'rgba(94,170,255,0.55)', 2.4, 0.65 * dec);
+      this._strokePolyline(ctx, pts, sv.x, sv.y, 'rgba(235,250,255,0.90)', 1.1, 0.80 * dec);
     }
+    // 冲击波细环（不填充）
+    const rr = z.radius * (0.72 + 0.28 * k);
+    ctx.globalAlpha = 0.30 * dec;
+    ctx.strokeStyle = '#8fc8ff';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(sv.x, sv.y, rr, 0, Math.PI * 2);
+    ctx.stroke();
+    // 接地蓝白亮点：小范围，不做大面积光墙
+    ctx.globalAlpha = 1;
+    Renderer._drawGlow(sv.x, sv.y, 12 + 8 * k, '#e8f8ff', 0.50 * dec);
+    ctx.globalAlpha = 0.85 * dec;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(sv.x, sv.y, 2.0, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
+  },
 
-    // 区域内敌人周围短促电弧
-    const enemies = EnemyManager.getAlive();
-    const rr = z.radius * z.radius;
-    const cam = Renderer.cam;
+  // 阶段 3：持续雷区（俯视近圆断裂边界 / 边缘电弧 / tick 局部提亮 / 间歇地面电弧）
+  _drawZoneGround(ctx, sv, z, t) {
+    const V = SKY_THUNDER_VIS;
+    const flick = this._timeBucket(z.elapsed);
+    const r = z.radius;
     ctx.save();
     ctx.lineCap = 'round';
-    for (const e of enemies) {
-      if (!e.alive) continue;
-      if (!Utils.isOnScreen(e.x, e.y, cam)) continue;
-      const dSq = Utils.distSq(e, z);
-      if (dSq > rr) continue;
-      const ev = Utils.worldToScreen(e.x, e.y, cam);
-      const flick = 0.45 + 0.3 * Math.sin(z.seed + e.id * 0.7 + z.elapsed * 30);
-      ctx.globalAlpha = flick;
-      ctx.strokeStyle = '#9fe8ff';
-      ctx.lineWidth = 1.5;
-      for (let k = 0; k < 2; k++) {
-        const a = z.seed + e.id + k * 2.3 + z.elapsed * 18;
-        const x0 = ev.x + Math.cos(a) * (e.radius || 12), y0 = ev.y + Math.sin(a) * (e.radius || 12);
+    // 近圆形断裂边界：角度固定，只做 12Hz 低频抖动（不旋转、不吸附）
+    for (let k = 0; k < V.activeSegments; k++) {
+      const gap = (Math.PI * 2 / V.activeSegments);
+      const a0 = z.seed * 0.7 + k * gap + this._seedRand(z.seed, k + 10) * gap * 0.15;
+      const a1 = a0 + gap * (0.42 + 0.22 * this._seedRand(z.seed, k + 20));
+      const boost = z.tickFlash > 0.01 ? 0.18 * z.tickFlash : 0;
+      const col = k % 3 === 0 ? '#8b6dff' : (k % 3 === 1 ? '#5b9dff' : '#7fd8ff');
+      this._jagArc(
+        ctx, sv.x, sv.y, r, a0, a1,
+        z.seed + flick * 13 + k * 5, 3.5,
+        col, 1.4,
+        0.16 + boost + 0.08 * this._seedRand(z.seed, k + 40)
+      );
+    }
+    // 边缘低频跳跃电弧：向内外两侧跳动
+    for (let k = 0; k < V.edgeArcs; k++) {
+      const a = z.seed + k * 1.37 + flick * 0.21;
+      const inOut = this._seedRand(z.seed + flick, k + 60) < 0.5 ? 1 : -1;
+      const len = 7 + this._seedRand(z.seed + flick, k + 80) * 13;
+      const x0 = sv.x + Math.cos(a) * (r - inOut * 2);
+      const y0 = sv.y + Math.sin(a) * (r - inOut * 2);
+      const x1 = x0 + Math.cos(a + (this._seedRand(z.seed + flick, k + 90) - 0.5) * 0.7) * len;
+      const y1 = y0 + Math.sin(a + (this._seedRand(z.seed + flick, k + 90) - 0.5) * 0.7) * len;
+      const mx = (x0 + x1) / 2 + (this._seedRand(z.seed + flick, k + 110) - 0.5) * 7;
+      const my = (y0 + y1) / 2 + (this._seedRand(z.seed + flick, k + 120) - 0.5) * 7;
+      ctx.globalAlpha = 0.20 + 0.20 * this._seedRand(z.seed + flick, k + 130);
+      ctx.strokeStyle = '#9fd8ff';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(mx, my);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    // 间歇地面短电弧：在雷区内跳动，不重播天空落雷
+    if (z.miniLife > 0) {
+      const a = z.miniAngle;
+      const r0 = r * (0.35 + 0.25 * this._seedRand(z.seed, 150));
+      const r1 = r * (0.78 + 0.10 * this._seedRand(z.seed, 151));
+      const x0 = sv.x + Math.cos(a) * r0;
+      const y0 = sv.y + Math.sin(a) * r0;
+      const x1 = sv.x + Math.cos(a + 0.35) * r1;
+      const y1 = sv.y + Math.sin(a + 0.35) * r1;
+      const mx = (x0 + x1) / 2 + (this._seedRand(z.seed + z.miniAngle, 160) - 0.5) * 10;
+      const my = (y0 + y1) / 2 + (this._seedRand(z.seed + z.miniAngle, 161) - 0.5) * 10;
+      const aLife = Math.max(0, z.miniLife / 0.10);
+      ctx.globalAlpha = 0.65 * aLife;
+      ctx.strokeStyle = 'rgba(190,235,255,0.9)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(mx, my);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+      ctx.globalAlpha = 0.28 * aLife;
+      ctx.strokeStyle = '#5b9dff';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+    // tick：只让边缘局部电纹短促提亮，不做中心大面积闪光
+    if (z.tickFlash > 0.01) {
+      ctx.globalAlpha = 0.18 * z.tickFlash;
+      ctx.strokeStyle = '#e8f8ff';
+      ctx.lineWidth = 1.6;
+      for (let k = 0; k < 3; k++) {
+        const a = z.seed + k * 2.1 + flick * 0.17;
+        const x0 = sv.x + Math.cos(a) * (r - 6);
+        const y0 = sv.y + Math.sin(a) * (r - 6);
         ctx.beginPath();
         ctx.moveTo(x0, y0);
-        ctx.lineTo(x0 + Math.cos(a) * 8 + Utils.rand(-4, 4), y0 + Math.sin(a) * 8 + Utils.rand(-4, 4));
+        ctx.lineTo(x0 + Math.cos(a + 0.4) * 12, y0 + Math.sin(a + 0.4) * 12);
         ctx.stroke();
       }
     }
     ctx.restore();
   },
 
-  // 阶段 4：雷区消散（边界从外向内收缩、电弧断裂、最后回到中心）
-  _drawZoneFade(ctx, sv, z, t, merged) {
+  // 阶段 4：雷区消散（边界逐段熄灭 + 极短冷蓝余光；不留燃烧/焦痕）
+  _drawZoneFade(ctx, sv, z, t) {
+    const segs = SKY_THUNDER_VIS.activeSegments;
+    const r = z.radius;
+    const flick = this._timeBucket(z.elapsed + 0.2);
     ctx.save();
-    const r = z.radius * (1 - t * 0.55);
-    if (!merged) {
-      ctx.lineCap = 'round';
-      ctx.lineWidth = 1.8;
-      for (let k = 0; k < 4; k++) {
-        const a0 = z.seed * 1.3 + k * (Math.PI / 2);
-        ctx.strokeStyle = '#6ab8ff';
-        ctx.globalAlpha = 0.32 * (1 - t);
-        ctx.beginPath();
-        ctx.arc(sv.x, sv.y, r, a0, a0 + Math.PI / 2 * 0.35 * (1 - t));
-        ctx.stroke();
-      }
-      // 最后一条电弧回到中心
-      if (t > 0.55) {
-        ctx.globalAlpha = 0.5 * (1 - t);
-        ctx.strokeStyle = '#dff4ff';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(sv.x + r * 0.5, sv.y - r * 0.3);
-        ctx.lineTo(sv.x, sv.y);
-        ctx.stroke();
-      }
+    ctx.lineCap = 'round';
+    for (let k = 0; k < segs; k++) {
+      const fadeAt = 0.08 + 0.62 * this._seedRand(z.seed, k + 200);
+      if (t > fadeAt) continue;
+      const gap = (Math.PI * 2 / segs);
+      const a0 = z.seed * 0.7 + k * gap + this._seedRand(z.seed, k + 10) * gap * 0.15;
+      const a1 = a0 + gap * (0.42 + 0.22 * this._seedRand(z.seed, k + 20));
+      const a = (1 - t / Math.max(0.2, fadeAt)) * 0.24;
+      this._jagArc(
+        ctx, sv.x, sv.y, r, a0, a1,
+        z.seed + flick * 13 + k * 5, 3.0,
+        k % 2 ? '#5b9dff' : '#8b6dff', 1.2, a
+      );
     }
-    // 焦痕渐显
-    Renderer._drawGlow(sv.x, sv.y, z.radius * 0.62, '#2b5cff', 0.16 * t);
+    // 极短冷蓝余光：只在落点附近，不留下持续痕迹
+    ctx.globalAlpha = 1;
+    Renderer._drawGlow(sv.x, sv.y, 12, '#6a8dff', 0.12 * (1 - t));
+    ctx.globalAlpha = 0.22 * (1 - t);
+    ctx.strokeStyle = '#bfe6ff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sv.x, sv.y, 8 + 10 * t, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   },
 
-  // ── 空中层：暗云 / 垂直光路 / 巨大雷柱 + 分叉 / 落地冲击闪光 / 屏幕闪光 ──
+  // ── 空中层：细长蓝白雷电 / 接地余晖 / 敌人麻痹局部电弧 ────────────────────
   _renderAir(ctx, cam, time) {
     // 已锁定小怪头顶的极小米蓝紫色雷印（预警期间；不画预约范围圈）
     for (let i = 0; i < this.reservations.length; i++) {
@@ -799,164 +821,291 @@ const SkyThunderManager = {
       if (!Utils.isOnScreen(z.x, z.y, cam, z.radius + 120)) continue;
       const sv = Utils.worldToScreen(z.x, z.y, cam);
       const t = (z.duration > 0) ? Math.min(1, z.elapsed / z.duration) : 1;
-
-      if (z.state === 'warning') {
-        this._drawSkyOmen(ctx, sv, z, t);
-      } else if (z.state === 'strike') {
-        this._drawSkyOmen(ctx, sv, z, 1 - t * 0.7);
+      if (z.state === 'strike') {
         this._drawBolt(ctx, sv, z, t);
       } else if (z.state === 'active') {
-        // 落雷结束，仅中心低亮余晖（亮度低于落雷瞬间）
-        Renderer._drawGlow(sv.x, sv.y - 26, z.radius * 0.5, '#6ab8ff', 0.1);
-      } else if (z.state === 'fade') {
-        // 天空暗云快速消散
-        this._drawCloud(ctx, sv, z, 0.22 * (1 - t), 0.5);
+        this._drawResidualBolt(ctx, sv, z);
       }
     }
 
-    // 落地局部闪光（alpha ≤ 0.06；同帧合并；绝不做全屏白闪式遮挡）
-    if (this.flash > 0.001) {
-      ctx.save();
-      ctx.globalAlpha = Math.min(SKY_THUNDER_FEEDBACK.strikeFlashAlpha, this.flash);
-      ctx.fillStyle = '#d6e8ff';
-      ctx.fillRect(0, 0, cam.sw, cam.sh);
-      ctx.restore();
-    }
+    // 敌人身上的引雷麻痹局部电流（画在敌人之上；麻痹结束即消失）
+    this._drawParalyzeArcs(ctx, cam, time);
   },
 
-  // 天空预兆：暗蓝压缩云层 + 蓝白聚光 + 极淡垂直光路
-  _drawSkyOmen(ctx, sv, z, t) {
-    this._drawCloud(ctx, sv, z, 0.28 + 0.12 * t, 1);
-    // 云层中心聚光
-    Renderer._drawGlow(sv.x, 74, 22 + 26 * t, '#bfe6ff', 0.12 + 0.35 * t);
-    // 从天空到目标的极淡垂直光路
-    const grad = ctx.createLinearGradient(sv.x, 80, sv.x, sv.y);
-    grad.addColorStop(0, `rgba(150,200,255,${0.05 + 0.06 * t})`);
-    grad.addColorStop(1, 'rgba(150,200,255,0.015)');
-    ctx.save();
-    ctx.fillStyle = grad;
-    ctx.fillRect(sv.x - 3, 80, 6, Math.max(0, sv.y - 80));
-    ctx.fillRect(sv.x - 9, 80, 18, Math.max(0, sv.y - 80));
-    ctx.restore();
-  },
-
-  // 暗蓝色压缩云层（屏幕上方，目标正上方）
-  _drawCloud(ctx, sv, z, alpha, widthScale) {
-    if (alpha <= 0.004) return;
-    const w = z.radius * 1.5 * widthScale * z.visualScale;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    const grad = ctx.createRadialGradient(sv.x, 70, 4, sv.x, 70, w);
-    grad.addColorStop(0, 'rgba(52,84,168,0.9)');
-    grad.addColorStop(0.55, 'rgba(30,52,120,0.5)');
-    grad.addColorStop(1, 'rgba(20,32,80,0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.ellipse(sv.x, 70, w, w * 0.34, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  },
-
-  // 天雷落地：巨大垂直雷柱（内芯高亮 / 外层光晕 / 分叉电弧 / 下降贯穿）
-  _drawBolt(ctx, sv, z, t) {
-    const scale = z.visualScale;
-    const yTop = -24, yEnd = sv.y;
-    // 下降进度：0.6 内贯穿到底，其后保持（落地冲击在 0.55）
-    const p = Math.min(1, t / 0.6);
-    const yTip = yTop + (yEnd - yTop) * p;
-
+  // 主雷电接地后的极短余晖：只保留主干，快速变细消失
+  _drawResidualBolt(ctx, sv, z) {
+    const a = this._clamp01(1 - z.impactT / 0.55);
+    if (a <= 0.01) return;
+    const V = SKY_THUNDER_VIS;
+    const trunk = z.boltPaths[0];
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-
-    // 柱体三层：外层光晕 40~65px → 中层 → 内芯 14~22px（不是细线、不是静态矩形）
-    const path = () => {
-      ctx.beginPath();
-      let started = false;
-      for (const pt of z.bolt) {
-        const py = yTop + (yEnd - yTop) * pt.y;
-        if (py > yTip) break;
-        const px = sv.x + pt.x;
-        if (!started) { ctx.moveTo(px, py); started = true; }
-        else ctx.lineTo(px, py);
-      }
-      if (started) ctx.lineTo(sv.x, yTip);
-    };
-    path();
-    ctx.strokeStyle = 'rgba(72,120,255,0.22)';
-    ctx.lineWidth = (40 + 25 * scale) * (0.75 + 0.25 * p);
+    ctx.globalAlpha = a;
+    ctx.beginPath();
+    this._addBoltSubpath(ctx, trunk, sv.x, V.boltTop, sv.y, 1, 0);
+    ctx.strokeStyle = V.outerColor;
+    ctx.lineWidth = 2.8;
     ctx.stroke();
-    path();
-    ctx.strokeStyle = 'rgba(106,184,255,0.55)';
-    ctx.lineWidth = 20 + 10 * scale;
+    ctx.strokeStyle = V.bodyColor;
+    ctx.lineWidth = 1.4;
     ctx.stroke();
-    path();
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-    ctx.lineWidth = 12 + 6 * scale;
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.lineWidth = 0.8;
     ctx.stroke();
+    ctx.restore();
+  },
 
-    // 分叉电弧（4~8 条不规则、尖锐、有方向性）
-    for (const br of z.branches) {
-      const by = yTop + (yEnd - yTop) * br.by;
-      if (by > yTip) continue;
-      ctx.beginPath();
-      ctx.moveTo(sv.x + br.x0, by);
-      for (const q of br.pts) ctx.lineTo(sv.x + br.x0 + q.x, by + q.y);
-      ctx.strokeStyle = 'rgba(120,190,255,0.5)';
-      ctx.lineWidth = 5;
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(230,245,255,0.85)';
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
-    }
-
-    // 落地冲击闪光（接触地面后）
-    if (t >= 0.55) {
-      const dec = 1 - Math.min(1, (t - 0.55) / 0.45);
-      Renderer._drawGlow(sv.x, sv.y, z.radius * 1.2, '#dff4ff', 0.55 * dec);
-      // 地面能量飞溅（向上短弧）
-      ctx.strokeStyle = 'rgba(200,235,255,0.8)';
-      ctx.lineWidth = 2.2;
-      for (let k = 0; k < 6; k++) {
-        const a = -Math.PI / 2 + (k - 2.5) * 0.42 + Math.sin(z.seed + k) * 0.15;
-        const len = (z.radius * 0.5) * (0.5 + 0.5 * dec);
+  // 麻痹局部电流：2~3 条短弧贴在敌人轮廓，冷蓝 + 少量白色，相位按敌人错开
+  _drawParalyzeArcs(ctx, cam, time) {
+    if (this._paraVisual.size === 0) return;
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const [id, v] of this._paraVisual) {
+      if (time >= v.until) { this._paraVisual.delete(id); continue; }
+      const e = this._findEnemyById(id);
+      if (!e || !e.alive) { this._paraVisual.delete(id); continue; }
+      if (!Utils.isOnScreen(e.x, e.y, cam, (e.radius || 14) + 24)) continue;
+      const sv = Utils.worldToScreen(e.x, e.y, cam);
+      const rad = (e.radius || 14) * 1.05;
+      const bucket = Math.floor(time * 14 + v.seed * 0.13);
+      const phase = time * 18 + v.seed;
+      for (let k = 0; k < 3; k++) {
+        const a = phase + k * 2.1 + this._seedRand(v.seed, k + 10) * 1.4;
+        const spread = 0.45 + 0.35 * this._seedRand(v.seed + bucket, k + 20);
+        const r0 = rad * (0.88 + 0.12 * this._seedRand(v.seed + bucket, k + 30));
+        const r1 = rad * (1.02 + 0.18 * this._seedRand(v.seed + bucket, k + 40));
+        const x0 = sv.x + Math.cos(a) * r0;
+        const y0 = sv.y + Math.sin(a) * r0 - rad * 0.1;
+        const x1 = sv.x + Math.cos(a + spread) * r1;
+        const y1 = sv.y + Math.sin(a + spread) * r1 - rad * 0.1;
+        const mx = (x0 + x1) / 2 + (this._seedRand(v.seed + bucket, k + 50) - 0.5) * 7;
+        const my = (y0 + y1) / 2 + (this._seedRand(v.seed + bucket, k + 60) - 0.5) * 7;
+        const fade = 0.55 + 0.35 * this._seedRand(v.seed + bucket, k + 70);
+        ctx.globalAlpha = fade;
+        ctx.strokeStyle = '#8fe0ff';
+        ctx.lineWidth = 1.1;
         ctx.beginPath();
-        ctx.moveTo(sv.x, sv.y);
-        ctx.lineTo(sv.x + Math.cos(a) * len, sv.y + Math.sin(a) * len * 0.75);
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(mx, my);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        ctx.globalAlpha = 0.28 * fade;
+        ctx.strokeStyle = '#4f86ff';
+        ctx.lineWidth = 2.6;
         ctx.stroke();
       }
     }
     ctx.restore();
   },
 
-  // 雷柱折线 + 分叉预生成（strike 期间周期重生成 → 分叉变化）
+  // 细长蓝白雷电：预计算折线路径，接地前分段向下延伸，接地后只做亮度闪动
+  _drawBolt(ctx, sv, z, t) {
+    const V = SKY_THUNDER_VIS;
+    const yTop = V.boltTop, yEnd = sv.y;
+    if (yEnd <= yTop + 4) return;
+
+    let tipNorm;
+    if (z.struck) {
+      tipNorm = 1;
+    } else {
+      const u = this._clamp01(t / 0.55);
+      const steps = 6;
+      tipNorm = Math.min(1, (Math.floor(u * steps) + 1) / steps);
+    }
+    if (tipNorm <= 0.001) return;
+
+    const vIdx = Math.floor(z.elapsed * 24) % 3;
+    const trunk = z.boltPaths[0];
+    const drift = [0, 1.8, 3.6][vIdx];
+    const flicker = [1, 0.72, 0.3, 0.95, 0.5, 0.8, 0.22][
+      Math.floor(z.elapsed * 30 + z.seed) % 7
+    ];
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // 主干：薄蓝紫光晕 → 电蓝外缘 → 蓝色主体
+    ctx.beginPath();
+    this._addBoltSubpath(ctx, trunk, sv.x, yTop, yEnd, tipNorm, drift);
+    ctx.strokeStyle = V.glowColor;
+    ctx.lineWidth = V.glowWidth;
+    ctx.stroke();
+    ctx.strokeStyle = V.outerColor;
+    ctx.lineWidth = V.outerWidth;
+    ctx.stroke();
+    ctx.strokeStyle = V.bodyColor;
+    ctx.lineWidth = V.bodyWidth;
+    ctx.stroke();
+
+    // 白色细核心（只画主干）
+    ctx.beginPath();
+    this._addBoltSubpath(ctx, trunk, sv.x, yTop, yEnd, tipNorm, drift);
+    ctx.strokeStyle = `rgba(255,255,255,${0.92 * flicker})`;
+    ctx.lineWidth = V.coreWidth;
+    ctx.stroke();
+
+    // 少量细叉：比主干更细、更暗
+    ctx.beginPath();
+    for (const br of z.branches) this._addBoltSubpath(ctx, br, sv.x, yTop, yEnd, tipNorm, drift);
+    ctx.strokeStyle = 'rgba(78, 120, 255, 0.20)';
+    ctx.lineWidth = 4.2;
+    ctx.stroke();
+    ctx.strokeStyle = V.forkColor;
+    ctx.lineWidth = V.forkWidth;
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(240, 250, 255, ${0.55 * flicker})`;
+    ctx.lineWidth = V.forkCoreWidth;
+    ctx.stroke();
+
+    // 延伸中的亮点 / 临界接地点
+    const tip = this._boltTip(trunk, sv.x, yTop, yEnd, tipNorm, drift);
+    Renderer._drawGlow(tip[0], tip[1], 8, '#cfefff', 0.42 * flicker);
+    ctx.restore();
+  },
+
+  // ── 雷电路径生成（创建时一次完成；strike 期间不再重建）────────────────────
   _genBolt(z) {
-    const n = 10;
-    const pts = new Array(n);
-    for (let i = 0; i < n; i++) {
-      pts[i] = {
-        x: (this._seedRand(z.seed, i) - 0.5) * 28,
-        y: i / (n - 1),
-      };
-    }
-    z.bolt = pts;
-    const bn = 4 + Math.floor(this._seedRand(z.seed, 99) * 5); // 4~8 条分叉
-    const brs = new Array(bn);
-    for (let k = 0; k < bn; k++) {
-      const by = 0.15 + 0.75 * this._seedRand(z.seed + 3, k);
-      const dir = (k % 2 === 0) ? 1 : -1;
-      const segs = 3;
-      const qs = new Array(segs);
-      for (let s = 0; s < segs; s++) {
-        qs[s] = {
-          x: dir * (14 + s * 16) + (this._seedRand(z.seed + 7, k * 5 + s) - 0.5) * 18,
-          y: 22 + s * 18 + (this._seedRand(z.seed + 11, k * 5 + s) - 0.5) * 14,
-        };
+    const rng = this._makeRng(Math.floor(z.seed * 1000003) ^ 0x9e3779b9);
+    const main = this._buildBolt(rng, SKY_THUNDER_VIS.trunkAmp, SKY_THUNDER_VIS.trunkDepth);
+    z.boltPaths = [main];
+    z.branches = this._buildBranches(rng, main);
+  },
+
+  _makeRng(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a |= 0;
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  },
+
+  // 中点位移生成主干：y 单调向下，x 摆幅逐层衰减；末点固定在落点
+  _buildBolt(rng, amp, depth) {
+    let pts = [[0, 0], [0, 1]];
+    let off = amp;
+    for (let d = 0; d < depth; d++) {
+      const next = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
+        let mx = (ax + bx) / 2 + (rng() * 2 - 1) * off;
+        if (rng() < 0.18) mx += (rng() < 0.5 ? -1 : 1) * off * 0.7; // 局部急转
+        next.push([mx, (ay + by) / 2], [bx, by]);
       }
-      brs[k] = { by, x0: (this._seedRand(z.seed, k + 20) - 0.5) * 22, pts: qs };
+      pts = next;
+      off *= 0.52;
     }
-    z.branches = brs;
+    pts[0][0] = (rng() * 2 - 1) * 4;
+    pts[pts.length - 1][0] = 0;
+    return pts;
+  },
+
+  // 亮度闪动使用的轻微路径偏移在绘制时叠加：首尾不偏移，中段产生 1~4px 抖动
+  _boltDriftX(drift, y) {
+    return drift * Math.sin(Math.PI * y);
+  },
+
+  // 3~4 条细叉，从主干随机节点分出，长度与雷区半径无关
+  _buildBranches(rng, main) {
+    const V = SKY_THUNDER_VIS;
+    const n = V.forksMin + Math.floor(rng() * (V.forksMax - V.forksMin + 1));
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      const ai = 2 + Math.floor(rng() * Math.max(1, main.length - 6));
+      const [ax, ay] = main[ai];
+      const dir = rng() < 0.5 ? -1 : 1;
+      const lenY = 0.05 + rng() * 0.10;
+      const pts = [[ax, ay]];
+      let x = ax, y = ay;
+      for (let s = 1; s <= 3; s++) {
+        x += dir * (6 + rng() * 9) * (1 - s * 0.12);
+        y += lenY / 3 * (0.65 + rng() * 0.7);
+        if (y > 0.985) y = 0.985;
+        pts.push([x, y]);
+      }
+      out.push(pts);
+    }
+    return out;
+  },
+
+  // 只绘制到 tipNorm 位置；跨过雷尖的线段按比例截断
+  _addBoltSubpath(ctx, pts, sx, yTop, yEnd, tipNorm, drift = 0) {
+    let started = false;
+    for (let i = 0; i < pts.length; i++) {
+      const [x, y] = pts[i];
+      if (y > tipNorm) {
+        if (i > 0 && pts[i - 1][1] < tipNorm) {
+          const [px, py] = pts[i - 1];
+          const u = (tipNorm - py) / (y - py);
+          const X = sx + px + (x - px) * u + this._boltDriftX(drift, tipNorm);
+          const Y = yTop + (yEnd - yTop) * tipNorm;
+          if (!started) { ctx.moveTo(X, Y); started = true; } else ctx.lineTo(X, Y);
+        }
+        break;
+      }
+      const X = sx + x + this._boltDriftX(drift, y);
+      const Y = yTop + (yEnd - yTop) * y;
+      if (!started) { ctx.moveTo(X, Y); started = true; } else ctx.lineTo(X, Y);
+    }
+    return started;
+  },
+
+  _boltTip(pts, sx, yTop, yEnd, tipNorm, drift = 0) {
+    for (let i = 1; i < pts.length; i++) {
+      if (pts[i][1] >= tipNorm) {
+        const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
+        const u = (tipNorm - ay) / Math.max(1e-6, by - ay);
+        const x0 = ax + this._boltDriftX(drift, ay);
+        const x1 = bx + this._boltDriftX(drift, by);
+        return [sx + x0 + (x1 - x0) * u, yTop + (yEnd - yTop) * tipNorm];
+      }
+    }
+    const last = pts[pts.length - 1];
+    return [sx + last[0] + this._boltDriftX(drift, last[1]), yTop + (yEnd - yTop) * last[1]];
+  },
+
+  // ── 地面/电弧绘制工具 ───────────────────────────────────────────────────
+  _timeBucket(t) {
+    return Math.floor(t * 12); // 12Hz 低频换形，避免每帧变成完全无关的形状
+  },
+
+  _clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; },
+
+  _jagArc(ctx, cx, cy, r, a0, a1, seed, jitter, color, width, alpha) {
+    if (alpha <= 0.003) return;
+    const segs = 7;
+    ctx.beginPath();
+    for (let i = 0; i <= segs; i++) {
+      const u = i / segs, a = a0 + (a1 - a0) * u;
+      const rr = r + (this._seedRand(seed, i) - 0.5) * jitter;
+      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+  },
+
+  _strokePolyline(ctx, pts, ox, oy, color, width, alpha) {
+    if (alpha <= 0.003) return;
+    const prev = ctx.globalAlpha;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const x = ox + pts[i][0], y = oy + pts[i][1];
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = prev;
   },
 
   // 确定性伪随机（同一 seed 每次调用结果一致，避免每帧闪烁跳变）
@@ -968,14 +1117,12 @@ const SkyThunderManager = {
   // ── 清空（重开 / 死亡 / 通关 / 返回开始页必须全部回收）────────────────────
   clearSkyThunderStrikes() {
     this.zones.length = 0;
-    this.scorch.length = 0;
     this.reservations.length = 0;
-    this.flash = 0;
     this.shake = 0;
     this._hitThisFrame.clear();
     this._paraGlobal.clear();
     this._paraEventCd.clear();
-    this._mergeBuf.length = 0;
+    this._paraVisual.clear();
     this._enBuf.length = 0;
   },
 };
