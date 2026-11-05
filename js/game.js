@@ -30,6 +30,8 @@ const Game = {
 
     // 连击计数器（pixelfx combo-counter 适配版，独立透明像素画布）
     if (typeof ComboCounterHUD !== 'undefined') ComboCounterHUD.init();
+    // 流派选择卡角色 ICON / 剪影（独立展示状态）
+    if (typeof CharacterUI !== 'undefined') CharacterUI.init();
 
     window.addEventListener('resize', () => {
       Renderer.resize(this.canvas);
@@ -63,9 +65,11 @@ const Game = {
   showGenreSelect() {
     this._stopBgCanvas(); // 离开开始界面后停掉背景动画
     this._showScreen('screen-genre');
+    if (typeof CharacterUI !== 'undefined') CharacterUI.show();
   },
 
   selectGenre(genre) {
+    if (typeof CharacterUI !== 'undefined') CharacterUI.hide();
     this._startGame(genre, false);
   },
 
@@ -329,6 +333,9 @@ const Game = {
     Renderer.drawMap();
     MapDecor.draw(ctx, cam);
 
+    // 玩家脚下环境光：地面层，位于敌人 / 危险预警 / 角色之下
+    if (state.player) Renderer.drawPlayerGroundLight(state.player);
+
     // 不息的暗影（流派 4）：暗影轨道场（远景引力场线 / 断裂主边界 / 次级轨道 / 中心核心；
     // 画在敌人与敌方预警之下，不遮挡战场信息）
     if (state.genre === 4) OrbitField.render(ctx, cam, state);
@@ -453,7 +460,7 @@ const Game = {
     }
 
     // Player
-    Renderer.drawPlayer(state.player, state.time);
+    Renderer.drawPlayer(state.player, state.time, state);
 
     // 不灭的暗影（流派 2）：护壳甲片与冲击特效（玩家之上）
     if (state.genre === 2) {

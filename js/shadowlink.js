@@ -189,6 +189,8 @@ function resolveDeathShadowByArchetype(x, y, enemy, state) {
     maxDuration: CONFIG.DEATH_SHADOW_DURATION,
     fireTimer:   0,        // Echo 流派用
     vortexTimer: 0,        // Vortex 流派用
+    aimAngle:    -Math.PI / 2,
+    anim:        (typeof CharacterAnim !== 'undefined' && state && state.genre === 0) ? new CharacterAnim(0) : null,
   });
 }
 
@@ -225,6 +227,7 @@ const DeathShadowManager = {
 
       if (genre === 0) {
         // Echo 流派：缓慢攻击，攻速为生成暗影的 1/2
+        if (s.anim) s.anim.update(dt, { moving: false, aimAngle: s.aimAngle, speedFactor: 6 });
         s.fireTimer -= dt;
         if (s.fireTimer <= 0) {
           const fireRate = CONFIG.ECHO.BASE_FIRE_RATE / 2;
@@ -259,6 +262,8 @@ const DeathShadowManager = {
     }
     if (nearest) {
       const angle = Utils.angle(s, nearest);
+      s.aimAngle = angle;
+      if (s.anim) s.anim.triggerFire('basic', angle);
       BulletManager.spawn(
         s.x, s.y, angle,
         CONFIG.ECHO.BULLET_SPEED,

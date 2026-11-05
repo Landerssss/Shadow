@@ -81,16 +81,37 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
   flex-wrap: wrap; justify-content: center;
 }
 .genre-card {
-  position: relative; width: 280px; padding: 32px 28px;
+  position: relative; width: 280px; min-height: 272px; padding: 32px 28px;
   background: var(--darkCard); border-radius: 20px; cursor: pointer;
   border: 1.5px solid #3a0080; overflow: hidden;
   transition: transform .2s, border-color .2s, box-shadow .2s;
   display: flex; flex-direction: column; gap: 10px;
 }
-.genre-card:hover {
+.genre-card:hover, .genre-card:focus-visible {
   transform: translateY(-8px) scale(1.02);
   border-color: var(--purple); box-shadow: 0 8px 40px #7b2fff55;
 }
+.genre-card:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; }
+/* 卡片右侧完整角色剪影：独立展示画布，不参与战斗逻辑 */
+.genre-silhouette {
+  position: absolute; right: -8px; bottom: -10px;
+  width: 42%; height: 88%; z-index: 1; pointer-events: none;
+  opacity: .72;
+  filter: saturate(.92) brightness(.94);
+  transition: transform .22s ease, filter .22s ease, opacity .22s;
+}
+.genre-card:hover .genre-silhouette,
+.genre-card:focus-visible .genre-silhouette {
+  transform: translateY(-3px);
+  filter: brightness(1.24) saturate(1.08);
+  opacity: 1;
+}
+/* 文字层优先：不被右侧剪影压住 */
+.genre-card > h3,
+.genre-card > .genre-name-en,
+.genre-card > ul { position: relative; z-index: 2; max-width: 61%; }
+.genre-card > .genre-badge { position: relative; z-index: 2; }
+.genre-card > .genre-card-glow { z-index: 0; }
 .genre-card-glow {
   position: absolute; inset: 0; opacity: 0; transition: opacity .3s;
   border-radius: 20px;
@@ -101,9 +122,14 @@ body { background: var(--dark); color: var(--text); overflow: hidden; width: 100
 .g2 { background: radial-gradient(ellipse at 50% 0%, #35f0ff33, transparent 70%); }
 .g3 { background: radial-gradient(ellipse at 50% 0%, #e0442633, transparent 70%); }
 .g4 { background: radial-gradient(ellipse at 50% 0%, #b26bff33, transparent 70%); }
-.genre-icon { font-size: 2.4rem; margin-bottom: 4px; }
+/* 角色头肩像图标（程序绘制，透明背景） */
+.genre-icon {
+  display: block; width: 44px; height: 44px; margin-bottom: 4px;
+  position: relative; z-index: 2; flex: 0 0 auto;
+  filter: drop-shadow(0 0 6px #7b2fff66) brightness(1.16) saturate(1.06);
+}
 .genre-card h3 { font-size: 1.3rem; font-weight: 700; color: #fff; }
-.genre-name-en { font-size: .8rem; color: var(--textDim); letter-spacing: .2em; margin-top: -6px; }
+.genre-name-en { font-size: .74rem; color: var(--textDim); letter-spacing: .12em; margin-top: -6px; white-space: nowrap; }
 .genre-card ul { list-style: none; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .genre-card ul li { font-size: .85rem; color: var(--textDim); padding-left: 14px; position: relative; }
 .genre-card ul li::before { content: '▸'; position: absolute; left: 0; color: var(--purple); }

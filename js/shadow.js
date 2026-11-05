@@ -21,6 +21,9 @@ class ShadowClone {
     this.targetY     = y;
     this.radius      = CONFIG.ECHO.BODY_RADIUS;
     this.speed       = 80;
+    this.aimAngle    = -Math.PI / 2;
+    // 每个分身拥有独立动作状态：按自己的真实开火事件播放后坐
+    this.anim        = (typeof CharacterAnim !== 'undefined') ? new CharacterAnim(0) : null;
   }
 
   update(dt, enemies, state) {
@@ -57,6 +60,10 @@ class ShadowClone {
       this.y += (dy / d) * this.speed * dt;
     }
 
+    if (this.anim) {
+      this.anim.update(dt, { moving: d > 5, aimAngle: this.aimAngle, speedFactor: 7 });
+    }
+
     // Find nearest enemy and shoot
     this.fireTimer -= dt;
     if (this.fireTimer <= 0 && enemies.length > 0) {
@@ -64,6 +71,8 @@ class ShadowClone {
       const nearest = this._nearestEnemy(enemies);
       if (nearest) {
         const angle = Utils.angle(this, nearest);
+        this.aimAngle = angle;
+        if (this.anim) this.anim.triggerFire('basic', angle);
         BulletManager.spawn(
           this.x, this.y, angle,
           CONFIG.ECHO.BULLET_SPEED,
@@ -73,6 +82,8 @@ class ShadowClone {
         );
       } else {
         // No enemies nearby — shoot upward
+        this.aimAngle = -Math.PI / 2;
+        if (this.anim) this.anim.triggerFire('basic', this.aimAngle);
         BulletManager.spawn(
           this.x, this.y, -Math.PI / 2,
           CONFIG.ECHO.BULLET_SPEED,
@@ -114,7 +125,10 @@ const ShadowCloneManager = {
     }
 
     const clone = new ShadowClone(x, y, dmg, rate, cfg.DURATION);
+    if (clone.anim && state.player) clone.anim.snapAim(state.player.facing);
     this.clones.push(clone);
+    // 分身生成：玩家身后短暂错位残影（不额外生成分身）
+    if (state.player && state.player._charAnim) state.player._charAnim.triggerSpawn();
     Particles.spawn(x, y, '#6600cc', 12, 100, 0.8);
   },
 

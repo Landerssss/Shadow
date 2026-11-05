@@ -202,6 +202,8 @@ const RicochetManager = {
     const sp = this._ballSpeed(state);
     ball.vx = Math.cos(angle) * sp;
     ball.vy = Math.sin(angle) * sp;
+    // 角色动作：只在真实弹球释放时播放送出动作（数量已满不会空发）
+    if (p._charAnim) p._charAnim.triggerFire('ball', angle);
     this._addFx('spark', ball.x, ball.y, 0, 0.35, '#c97bff');
   },
 
@@ -310,6 +312,7 @@ const RicochetManager = {
     const cc = CONFIG.CHARGED_BALL;
     const chg = this._chg;
     const p = state.player;
+    if (p._charAnim) p._charAnim.setCharge(0);
 
     // 移动方向采样（发射方向优先级用）
     const mv = Math.hypot(p.vx || 0, p.vy || 0);
@@ -343,6 +346,7 @@ const RicochetManager = {
           const dx = p.x - ball.x, dy = p.y - ball.y;
           ball.recallCtrlX = (ball.x + p.x) / 2 - dy * 0.35;
           ball.recallCtrlY = (ball.y + p.y) / 2 + dx * 0.35;
+          if (p._charAnim) p._charAnim.triggerRecall(dur);
           this._addFx('recall', ball.x, ball.y, 0, dur, '#8a4ad9');
         } else {
           chg.timer = 0.5; // 暂无可用球（都在凝聚），稍后再试
@@ -374,6 +378,7 @@ const RicochetManager = {
     chg.chargeT += dt;
     const orbitDur = cc.orbitDuration;
     const t = Math.min(1, chg.chargeT / orbitDur);
+    if (p._charAnim) p._charAnim.setCharge(t);
     const orbitSpd = cc.initialOrbitSpeed + (cc.finalOrbitSpeed - cc.initialOrbitSpeed) * t;
     chg.orbitAng += orbitSpd * dt * chg.orbitDir;
     ball.x = p.x + Math.cos(chg.orbitAng) * cc.orbitRadius;
@@ -458,6 +463,12 @@ const RicochetManager = {
     const cc = CONFIG.CHARGED_BALL;
     const chg = this._chg;
     const ang = Math.atan2(chg.launchY, chg.launchX);
+    // 角色动作：蓄能球真实发射事件
+    if (state.player._charAnim) {
+      state.player._charAnim.triggerFire(state.genreLv >= 6 ? 'chargedThunder' : 'charged', ang);
+      state.player._charAnim.setCharge(0);
+      if (state.genreLv >= 6) state.player._charAnim.triggerThunder();
+    }
     ball.state = 'normal';
     ball.chargedTag = true;
     ball.firstHitBonus = true;

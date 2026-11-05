@@ -180,6 +180,8 @@ const UndyingManager = {
   _firePulse(state, extra) {
     const cfg = CONFIG.UNDYING;
     const p = state.player;
+    // 角色动作：蚀白冲击真正释放时甲片展开、重心压低（纯视觉）
+    if (p._charAnim) p._charAnim.triggerSkill('pulse', 0.55, p.facing);
     // 实际消耗：当前护壳 50% + 蓄势期额外消耗（已 clamp）
     const cap = this.shellMax(state);
     const consume = Math.min(this.shell, this.shell * cfg.PULSE_CONSUME_PCT + extra);

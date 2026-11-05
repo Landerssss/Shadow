@@ -28,9 +28,10 @@
     <h2 class="genre-title">选择你的流派</h2>
     <p class="genre-hint">你的选择将影响整场战斗的风格</p>
     <div class="genre-cards">
-      <div class="genre-card" id="card-genre-0" onclick="Game.selectGenre(0)">
+      <div class="genre-card" id="card-genre-0" tabindex="0" onclick="Game.selectGenre(0)">
         <div class="genre-card-glow g0"></div>
-        <div class="genre-icon">👤</div>
+        <canvas class="genre-silhouette" data-char-sil="0" aria-hidden="true"></canvas>
+        <canvas class="genre-icon" data-char-icon="0" width="44" height="44" aria-hidden="true"></canvas>
         <h3>回到过去</h3>
         <p class="genre-name-en">Shadow Echo</p>
         <ul>
@@ -38,9 +39,10 @@
         </ul>
         <div class="genre-badge">召唤流</div>
       </div>
-      <div class="genre-card" id="card-genre-1" onclick="Game.selectGenre(1)">
+      <div class="genre-card" id="card-genre-1" tabindex="0" onclick="Game.selectGenre(1)">
         <div class="genre-card-glow g1"></div>
-        <div class="genre-icon">🌀</div>
+        <canvas class="genre-silhouette" data-char-sil="1" aria-hidden="true"></canvas>
+        <canvas class="genre-icon" data-char-icon="1" width="44" height="44" aria-hidden="true"></canvas>
         <h3>黑洞</h3>
         <p class="genre-name-en">Shadow Vortex</p>
         <ul>
@@ -48,9 +50,10 @@
         </ul>
         <div class="genre-badge">控场流</div>
       </div>
-      <div class="genre-card" id="card-genre-2" onclick="Game.selectGenre(2)">
+      <div class="genre-card" id="card-genre-2" tabindex="0" onclick="Game.selectGenre(2)">
         <div class="genre-card-glow g3"></div>
-        <div class="genre-icon">🩸</div>
+        <canvas class="genre-silhouette" data-char-sil="2" aria-hidden="true"></canvas>
+        <canvas class="genre-icon" data-char-icon="2" width="44" height="44" aria-hidden="true"></canvas>
         <h3>不灭</h3>
         <p class="genre-name-en">Shadow Undying</p>
         <ul>
@@ -58,9 +61,10 @@
         </ul>
         <div class="genre-badge">汲取流</div>
       </div>
-      <div class="genre-card" id="card-genre-3" onclick="Game.selectGenre(3)">
+      <div class="genre-card" id="card-genre-3" tabindex="0" onclick="Game.selectGenre(3)">
         <div class="genre-card-glow g2"></div>
-        <div class="genre-icon">⏳</div>
+        <canvas class="genre-silhouette" data-char-sil="3" aria-hidden="true"></canvas>
+        <canvas class="genre-icon" data-char-icon="3" width="44" height="44" aria-hidden="true"></canvas>
         <h3>因果</h3>
         <p class="genre-name-en">Causal Echo</p>
         <ul>
@@ -68,9 +72,10 @@
         </ul>
         <div class="genre-badge">连锁流</div>
       </div>
-      <div class="genre-card" id="card-genre-4" onclick="Game.selectGenre(4)">
+      <div class="genre-card" id="card-genre-4" tabindex="0" onclick="Game.selectGenre(4)">
         <div class="genre-card-glow g4"></div>
-        <div class="genre-icon">🔮</div>
+        <canvas class="genre-silhouette" data-char-sil="4" aria-hidden="true"></canvas>
+        <canvas class="genre-icon" data-char-icon="4" width="44" height="44" aria-hidden="true"></canvas>
         <h3>不息</h3>
         <p class="genre-name-en">Shadow Ricochet</p>
         <ul>
@@ -149,6 +154,7 @@
 
   <script src="js/utils.js"></script>
   <script src="js/config.js"></script>
+  <script src="js/characters.js"></script>
   <script src="js/iceshell.js"></script>
   <script src="js/renderer.js"></script>
   <script src="js/particles.js"></script>

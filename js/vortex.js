@@ -266,6 +266,8 @@ const VortexManager = {
           }
           this.projectiles.push(new VortexProjectile(player.x, player.y, angle + spread, state));
         }
+        // 角色动作：漩涡释放的真正发射时刻（不改变弹道 / 数量 / 时刻）
+        if (player._charAnim) player._charAnim.triggerSkill('vortex', 0.5, angle);
       }
     }
 

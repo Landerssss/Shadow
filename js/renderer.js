@@ -16,6 +16,8 @@ const Renderer = {
     // 地图大小 = 屏幕 × 1.2（上下左右各留 10% 边距）
     CONFIG.MAP_W = canvas.width  * 1.2;
     CONFIG.MAP_H = canvas.height * 1.2;
+    this._mapBg = null;
+    this._mapBgKey = '';
   },
 
   clear() {
@@ -90,11 +92,72 @@ const Renderer = {
     ctx.globalAlpha = a;
   },
 
+  // ── 地图背景缓存（固定种子 / 只生成一次，不每帧创建渐变）──────────
+  _mapBg: null,
+  _mapBgKey: '',
+
+  _ensureMapBackground() {
+    const W = CONFIG.MAP_W, H = CONFIG.MAP_H;
+    const key = Math.round(W) + 'x' + Math.round(H);
+    if (this._mapBg && this._mapBgKey === key) return this._mapBg;
+
+    // 半分辨率预渲染后放大：大尺度色块天然柔和，且只上传一次
+    const scale = 0.5;
+    const cw = Math.max(2, Math.round(W * scale));
+    const ch = Math.max(2, Math.round(H * scale));
+    const c = document.createElement('canvas');
+    c.width = cw;
+    c.height = ch;
+    const g = c.getContext('2d');
+    g.setTransform(cw / W, 0, 0, ch / H, 0, 0);
+
+    // 低亮度暗紫灰地面（不是全屏白色蒙层）
+    g.fillStyle = '#171125';
+    g.fillRect(0, 0, W, H);
+
+    // 棋盘格只保留极轻微明度差，避免角色移动时忽明忽暗
+    const tile = 64;
+    g.fillStyle = '#151022';
+    for (let tx = 0; tx < W; tx += tile) {
+      for (let ty = 0; ty < H; ty += tile) {
+        if (((((tx / tile) | 0) + ((ty / tile) | 0)) & 1)) {
+          g.fillRect(tx, ty, tile, tile);
+        }
+      }
+    }
+
+    // 固定种子的超大尺度柔光 / 暗斑；幅度很低，不会形成危险区暗示
+    let seed = 0x5eed1721;
+    const rnd = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const blobs = Math.max(10, Math.round((W * H) / 220000));
+    for (let i = 0; i < blobs; i++) {
+      const x = rnd() * W, y = rnd() * H;
+      const r = 190 + rnd() * 430;
+      const light = rnd() < 0.55;
+      const a = light ? 0.06 + rnd() * 0.035 : 0.07 + rnd() * 0.035;
+      const rgb = light ? '64,48,94' : '8,5,16';
+      const grad = g.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, `rgba(${rgb},${a.toFixed(3)})`);
+      grad.addColorStop(0.55, `rgba(${rgb},${(a * 0.45).toFixed(3)})`);
+      grad.addColorStop(1, `rgba(${rgb},0)`);
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(x, y, r, 0, Math.PI * 2);
+      g.fill();
+    }
+
+    this._mapBg = c;
+    this._mapBgKey = key;
+    return c;
+  },
+
   // ── BACKGROUND MAP ──────────────────────────────────────────────
   drawMap(mapData) {
     const ctx = this.ctx;
     const cam = this.cam;
-    // Dark tile grid
     const tileSize = 64;
     const ox = cam.sw / 2 - cam.x; // 世界→屏幕常量偏移（内联换算，零分配）
     const oy = cam.sh / 2 - cam.y;
@@ -103,22 +166,13 @@ const Renderer = {
     const endX = cam.x + cam.sw / 2 + tileSize;
     const endY = cam.y + cam.sh / 2 + tileSize;
 
-    // 棋盘格分两遍铺（每种颜色只切换一次 fillStyle）
-    for (let pass = 0; pass < 2; pass++) {
-      ctx.fillStyle = pass === 0 ? '#0a0418' : '#0d0520';
-      for (let wx = startX; wx < endX; wx += tileSize) {
-        const sx = wx + ox;
-        const px = Math.floor(wx / tileSize);
-        for (let wy = startY; wy < endY; wy += tileSize) {
-          if (((px + Math.floor(wy / tileSize)) & 1) !== pass) continue;
-          ctx.fillRect(sx, wy + oy, tileSize + 1, tileSize + 1);
-        }
-      }
-    }
+    // 一次性缓存的地面底色与轻微色块变化（固定世界坐标，不随帧变化）
+    const bg = this._ensureMapBackground();
+    ctx.drawImage(bg, 0, 0, bg.width, bg.height, ox, oy, CONFIG.MAP_W, CONFIG.MAP_H);
 
-    // Subtle grid lines（合并为一次 stroke；有冲击波时按段扭曲）
-    ctx.strokeStyle = '#1a0840';
-    ctx.lineWidth = 0.5;
+    // 低饱和灰紫单层细网格；交点不额外发光
+    ctx.strokeStyle = 'rgba(150,132,190,0.105)';
+    ctx.lineWidth = 0.65;
     ctx.beginPath();
     if (typeof CombatFeedback !== 'undefined' && CombatFeedback.gridWaves.length > 0) {
       const gcfg = (typeof COMBAT_FX !== 'undefined') ? COMBAT_FX.grid : { segPx: 32 };
@@ -229,116 +283,80 @@ const Renderer = {
     ctx.restore();
   },
 
-  // ── PLAYER (pixel chibi) ──────────────────────────────────────────
-  drawPlayer(player, time) {
+  // ── 玩家脚下环境光（仅地面层，不参与碰撞 / 伤害）──────────────────
+  drawPlayerGroundLight(player) {
+    if (!player || player.hp <= 0) return;
+    const s = Utils.worldToScreen(player.x, player.y, this.cam);
+    // 半径 92px，中心极低透明度，柔和衰减；使用缓存的径向贴图
+    this._drawGlow(s.x, s.y + 2, 92, '#8b78b8', 0.075);
+  },
+
+  // ── PLAYER（五流派程序角色）────────────────────────────────────────
+  drawPlayer(player, time, state) {
     const ctx = this.ctx;
     const s = Utils.worldToScreen(player.x, player.y, this.cam);
     let sx = Math.round(s.x);
     let sy = Math.round(s.y);
-    // 开火后坐：渲染位置沿开火反方向偏移（不移动本体/碰撞）
+    // 开火后坐：渲染位置沿开火反方向偏移（不移动本体 / 碰撞）
     if (player._recoil && player._recoil.t > 0) {
       const k = Math.max(0, player._recoil.t / player._recoil.dur);
       sx += player._recoil.dx * player._recoil.px * k;
       sy += player._recoil.dy * player._recoil.px * k;
     }
-    const facing = player.facing; // angle
-    const bob = Math.sin(time * 6) * 2;
-    const r = CONFIG.PLAYER_RADIUS;
 
-    ctx.save();
-    ctx.translate(sx, sy + bob);
+    const genre = state ? state.genre : 0;
+    const anim = player._charAnim;
 
-    // Shadow blob under player
-    ctx.save();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = 'rgba(100,0,200,0.25)';
-    ctx.beginPath();
-    ctx.ellipse(0, r + 4, r * 0.8, r * 0.25, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-
-    // Glow aura
+    // 角色后方光晕：仅无敌时保留；常规定位改由脚下环境光承担
     if (player.invincibleTimer > 0) {
-      ctx.shadowBlur = 30; ctx.shadowColor = '#ff3cac';
-    } else {
-      ctx.shadowBlur = 20; ctx.shadowColor = '#7b2fff';
+      this._drawGlow(sx, sy - 24, 34, '#ff3cac', 0.38);
     }
 
-    // Body cloak
-    ctx.fillStyle = '#2a0060';
-    ctx.beginPath();
-    ctx.ellipse(0, 4, r * 0.75, r * 0.95, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Cloak highlight
-    ctx.fillStyle = '#5a10b0';
-    ctx.beginPath();
-    ctx.ellipse(-4, 0, r * 0.35, r * 0.55, -0.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Head
-    ctx.fillStyle = '#f0e0ff';
-    ctx.beginPath();
-    ctx.arc(0, -r * 0.55, r * 0.42, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Hair
-    ctx.fillStyle = '#dde8ff';
-    ctx.fillRect(-r * 0.38, -r - 2, r * 0.76, r * 0.5);
-    ctx.beginPath();
-    ctx.arc(0, -r * 0.85, r * 0.42, 0, Math.PI);
-    ctx.fill();
-
-    // Eyes (red)
-    ctx.fillStyle = '#ff3060';
-    ctx.shadowBlur = 8; ctx.shadowColor = '#ff3060';
-    ctx.fillRect(-6, -r * 0.55 - 2, 4, 3);
-    ctx.fillRect(3,  -r * 0.55 - 2, 4, 3);
-    ctx.shadowBlur = 0;
-
-    // Gun direction indicator
     ctx.save();
-    ctx.rotate(facing);
-    ctx.fillStyle = '#888ab0';
-    ctx.fillRect(4, -3, r * 0.9, 6);
-    ctx.fillStyle = '#aaccff';
-    ctx.fillRect(r * 0.4, -2, r * 0.5, 4);
-    // muzzle flash
-    if (player.muzzleFlash > 0) {
-      ctx.fillStyle = `rgba(200,180,255,${player.muzzleFlash})`;
-      ctx.shadowBlur = 12; ctx.shadowColor = '#c97bff';
-      ctx.beginPath();
-      ctx.arc(r * 0.95, 0, 7, 0, Math.PI * 2);
-      ctx.fill();
+    ctx.translate(sx, sy);
+
+    if (anim && typeof Characters !== 'undefined') {
+      let shellPct = 0;
+      if (state && state.genre === 2 && typeof UndyingManager !== 'undefined' && UndyingManager.shellMax) {
+        const cap = UndyingManager.shellMax(state);
+        shellPct = cap > 0 ? Math.max(0, Math.min(1, UndyingManager.shell / cap)) : 0;
+      }
+      Characters.draw(ctx, genre, anim, 0, 0, {
+        height: 62,
+        shellPct,
+        alpha: player.hp <= 0 ? 0.55 : 1,
+      });
     }
+
+    // 主角血条：按实际可见最高点让位，帽尖 / 冠片不被压住
+    const charTop = (typeof Characters !== 'undefined' && Characters.visualTop)
+      ? Characters.visualTop(genre, 62)
+      : 58;
+    this._drawPlayerHpBar(player, CONFIG.PLAYER_RADIUS, time, -charTop - 10);
+
     ctx.restore();
 
-    // 主角血条（正下方）
-    this._drawPlayerHpBar(player, r, time);
-
-    ctx.restore();
-
-    // 受击闪红（独立于画布坐标，不受 translate/bob 影响）
+    // 受击：短促红色轮廓光，不覆盖成整块白 / 红
     if (player.hitFlash > 0) {
       ctx.save();
-      ctx.globalAlpha = Math.min(1, player.hitFlash * 5);
-      ctx.shadowBlur = 18;
-      ctx.shadowColor = '#ff3c6e';
-      ctx.fillStyle = '#ff3c6e';
+      ctx.globalAlpha = Math.min(0.85, player.hitFlash * 4.5);
+      this._drawGlow(sx, sy - 24, 26, '#ff3c6e', 0.7);
+      ctx.strokeStyle = 'rgba(255,80,120,0.75)';
+      ctx.lineWidth = 1.6;
       ctx.beginPath();
-      ctx.arc(sx, Math.round(sy + bob), r * 1.1, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.ellipse(sx, sy - 24, 17, 26, 0, 0, Math.PI * 2);
+      ctx.stroke();
       ctx.restore();
     }
   },
 
-  _drawPlayerHpBar(player, r, time) {
+  _drawPlayerHpBar(player, r, time, topY) {
     const ctx = this.ctx;
     const maxHp = player.effectiveMaxHp || 1;
     const pct = Math.max(0, Math.min(1, player.hp / maxHp));
     const bw = 44, bh = 6;
     const rx = bw / 2, ry = bh / 2;
-    const bx = -rx, by = -r - 12 - bh; // 血条挪到主角上方
+    const bx = -rx, by = (topY != null ? topY : (-r - 12 - bh)); // 血条在角色上方
 
     ctx.save();
     ctx.shadowBlur = 0;
@@ -1582,38 +1600,35 @@ const Renderer = {
     const sy = Math.round(s.y);
     const alpha = Math.min(1, (shadow.maxDuration - shadow.timer) / 0.5,
                              shadow.timer / 0.5);
+
+    if (shadow.anim && typeof Characters !== 'undefined') {
+      ctx.save();
+      this._drawGlow(sx, sy - 18, 22, '#6600cc', 0.35 * alpha);
+      ctx.globalAlpha *= alpha;
+      Characters.draw(ctx, 0, shadow.anim, sx, sy, {
+        height: 49,
+        mode: 'shadow',
+        alpha: 0.92,
+      });
+      ctx.restore();
+      return;
+    }
+
+    // 兜底：旧版暗影小球（理论上不再使用）
     const r = CONFIG.ECHO.BODY_RADIUS;
     const bob = Math.sin(time * 4 + shadow.id) * 2;
     const pulse = 0.85 + Math.sin(time * 3 + shadow.id) * 0.15;
-
     ctx.save();
     ctx.globalAlpha = alpha * pulse;
     ctx.translate(sx, sy + bob);
-
-    // 发光光晕（替代 shadowBlur）
     this._drawGlow(0, 0, r * 2.1, '#6600cc', 0.8);
-
-    // Core body
     ctx.fillStyle = '#1a0040';
     ctx.beginPath();
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.fill();
-
-    // Purple flame aura
-    ctx.fillStyle = 'rgba(100,0,200,0.4)';
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + time * 1.5;
-      const dist = r + 5 + Math.sin(time * 3 + i) * 4;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * dist * 0.6, Math.sin(a) * dist * 0.6, 5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Eyes
     ctx.fillStyle = '#aa44ff';
     ctx.fillRect(-5, -3, 3, 4);
-    ctx.fillRect(2,  -3, 3, 4);
-
+    ctx.fillRect(2, -3, 3, 4);
     ctx.restore();
   },
 
@@ -2272,18 +2287,30 @@ const Renderer = {
   drawDeathShadow(ds, time) {
     const ctx = this.ctx;
     const s = Utils.worldToScreen(ds.x, ds.y, this.cam);
+    const sx = Math.round(s.x);
+    const sy = Math.round(s.y);
     const lifeRatio = ds.timer / ds.maxDuration;
     const alpha = Math.min(lifeRatio * 4, (1 - lifeRatio) * 4, 0.7);
+
+    // 流派 0：死亡分身沿用枪手轮廓（更暗、更透明）
+    if (ds.anim && typeof Characters !== 'undefined') {
+      this._drawGlow(sx, sy - 18, 22, '#330066', 0.5 * alpha);
+      Characters.draw(ctx, 0, ds.anim, sx, sy, {
+        height: 48,
+        mode: 'shadow',
+        alpha: Math.min(0.85, alpha + 0.12),
+      });
+      return;
+    }
+
     const pulse = 0.8 + Math.sin(time * 2 + ds.id) * 0.2;
     const r = 10;
-
     ctx.save();
     ctx.globalAlpha = alpha * pulse;
-    // 发光光晕（替代 shadowBlur）
-    this._drawGlow(Math.round(s.x), Math.round(s.y), r * 2.2, '#330066', 0.9);
+    this._drawGlow(sx, sy, r * 2.2, '#330066', 0.9);
     ctx.fillStyle = '#220044';
     ctx.beginPath();
-    ctx.arc(Math.round(s.x), Math.round(s.y), r, 0, Math.PI * 2);
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = '#6600aa55';
     ctx.lineWidth = 1.5;

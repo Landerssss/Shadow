@@ -80,6 +80,8 @@ const Player = {
     this.kills    = 0;
     this.totalDmg = 0;
     this._recoil  = null;
+    // 角色程序绘制动作状态（与真实攻击事件同步，仅视觉）
+    this._charAnim = (typeof CharacterAnim !== 'undefined') ? new CharacterAnim(0) : null;
     // 无尽模式：BUFF 加成倍率（>1 时所有 apply*Buff 的数值乘以此值）
     this._endlessMult = (opts && opts.endlessBuffMult) ? opts.endlessBuffMult : 1;
   },
@@ -121,6 +123,11 @@ const Player = {
     if (this.hitFlash > 0)       this.hitFlash -= dt;
     // 开火后坐恢复（仅渲染偏移）
     if (this._recoil && this._recoil.t > 0) this._recoil.t -= dt;
+    // 角色动作：待机 / 移动 / 攻击姿态（不参与攻击调度）
+    if (this._charAnim) {
+      const moving = Math.hypot(this.vx, this.vy) > 26;
+      this._charAnim.update(dt, { moving, aimAngle: this.facing, speedFactor: 8 });
+    }
     // 暗影能源：每 5s 回复 15% 最大血量（走统一恢复入口；满血仍有溢出恢复 → 护壳）
     if (this.shadowEnergy) {
       this.shadowEnergyTimer -= dt;
@@ -223,6 +230,8 @@ const Player = {
         if (sb2) { if (this.bulletPierce > 0) sb2.pierce = this.bulletPierce; sb2.batchId = batchId; }
       }
       this.muzzleFlash = 1;
+      // 角色动作：与真实开火事件同步（散弹一轮只播放一次主后坐）
+      if (this._charAnim) this._charAnim.triggerFire('basic', angle);
       // 开火后坐（散弹按一次开火计一次）
       if (typeof CombatFeedback !== 'undefined') CombatFeedback.onPlayerFire(this);
     }

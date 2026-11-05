@@ -151,6 +151,12 @@ const EchoManager = {
     const chainCount = this._chainCounts.get(evt.chainId) || 0;
     if (chainCount >= CAUSAL_RULES.maxChainLength) return;
 
+    // 角色动作：重要因果事件让冠片与胸前印片短暂对齐（内部限频，高频事件不抽动）
+    if (state.player && state.player._charAnim &&
+        (evt.type === ECHO_EVENT.HIT || evt.type === ECHO_EVENT.CRIT || evt.type === ECHO_EVENT.RUPTURE)) {
+      state.player._charAnim.triggerNode();
+    }
+
     // 1) 生成节点（事件本身落点固定；反应事件 canCreateNode=false 不生成完整节点）
     if (evt.canCreateNode && this._nodeChance(evt, state)) {
       if (this.echoes.length < CAUSAL_RULES.maxActiveNodes) {

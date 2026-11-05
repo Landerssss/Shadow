@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>暗影回响 · 角色程序绘制预览</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  html, body { min-height: 100%; }
+  body {
+    background: radial-gradient(ellipse at 50% -10%, #1b0740 0%, #07030f 62%);
+    color: #e9e0ff; padding: 28px 36px 60px; overflow: auto;
+    font-family: "Noto Sans SC", system-ui, sans-serif;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; color: #d7b8ff; letter-spacing: .04em; }
+  .sub { color: #8b7fa8; font-size: .82rem; margin-bottom: 26px; }
+  .section-title { font-size: 1rem; color: #c9a8ff; margin: 30px 0 12px; letter-spacing: .08em; }
+  .hint { color: #857a9f; font-size: .76rem; margin: -4px 0 12px; }
+  .sheet-wrap, .icons-wrap, .demo-wrap {
+    border: 1px solid #2a1250; border-radius: 16px; background: rgba(17,7,36,.55);
+    padding: 18px 22px; overflow: auto;
+  }
+  canvas.sheet { display: block; }
+  .icons-row { display: flex; gap: 26px; align-items: flex-end; flex-wrap: wrap; }
+  .icon-cell { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .icon-cell canvas { display: block; width: 44px; height: 44px; image-rendering: auto; }
+  .icon-cell .zoom { width: 132px; height: 132px; }
+  .icon-cell span { font-size: .72rem; color: #9a8cb8; }
+  .demo-wrap { display: flex; gap: 18px; flex-wrap: wrap; }
+  .demo-cell { width: 210px; }
+  .demo-cell canvas { display: block; width: 210px; height: 190px; background: radial-gradient(ellipse at 50% 85%, #1a0838, transparent 70%); border-radius: 12px; }
+  .demo-cell .state { text-align: center; font-size: .75rem; color: #b9a5da; margin-top: 4px; }
+  .demo-cell .name { text-align: center; font-size: .78rem; color: #e2d5ff; margin-top: 6px; }
+  .cards-note { color: #857a9f; font-size: .76rem; margin: 4px 0 14px; }
+  .genre-cards { justify-content: flex-start; }
+  .genre-card { width: 268px; }
+  .palette-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .palette-chip { font-size: .72rem; color: #bda9df; border: 1px solid #3a2160; border-radius: 99px; padding: 3px 10px; }
+</style>
+</head>
+<body>
+  <h1>暗影回响 · 玩家角色程序绘制预览</h1>
+  <div class="sub">全部图形由 Canvas 2D 路径 / 多边形 / 贝塞尔曲线实时生成，未使用参考设定图贴图。</div>
+
+  <div class="section-title">1. 五名角色 · 同一比例并排全身图</div>
+  <div class="hint">设计高度 56，按局内约 54px 视觉高度统一缩放。可辨认：枪手 / 法师 / 战士 / 司祭 / 驭球者。</div>
+  <div class="sheet-wrap"><canvas id="sheet" class="sheet"></canvas></div>
+
+  <div class="section-title">2. 五个头像 ICON · 实际尺寸 44px</div>
+  <div class="hint">左侧为实际显示尺寸，右侧为 3 倍放大检查细节。背景透明。</div>
+  <div class="icons-wrap"><div class="icons-row" id="icon-row"></div></div>
+
+  <div class="section-title">3. 五张流派选择卡 · 右侧完整剪影</div>
+  <div class="cards-note">沿用游戏内卡片布局与文案；剪影由同一套角色几何生成，悬停 / 键盘聚焦会提亮并播放一次准备动作。</div>
+  <div class="genre-cards">
+    <div class="genre-card" id="card-genre-0" tabindex="0">
+      <div class="genre-card-glow g0"></div>
+      <canvas class="genre-silhouette" data-char-sil="0" aria-hidden="true"></canvas>
+      <canvas class="genre-icon" data-char-icon="0" width="44" height="44" aria-hidden="true"></canvas>
+      <h3>回到过去</h3>
+      <p class="genre-name-en">Shadow Echo</p>
+      <ul><li>留下你的分身</li></ul>
+      <div class="genre-badge">召唤流</div>
+    </div>
+    <div class="genre-card" id="card-genre-1" tabindex="0">
+      <div class="genre-card-glow g1"></div>
+      <canvas class="genre-silhouette" data-char-sil="1" aria-hidden="true"></canvas>
+      <canvas class="genre-icon" data-char-icon="1" width="44" height="44" aria-hidden="true"></canvas>
+      <h3>黑洞</h3>
+      <p class="genre-name-en">Shadow Vortex</p>
+      <ul><li>掌握暗影漩涡</li></ul>
+      <div class="genre-badge">控场流</div>
+    </div>
+    <div class="genre-card" id="card-genre-2" tabindex="0">
+      <div class="genre-card-glow g3"></div>
+      <canvas class="genre-silhouette" data-char-sil="2" aria-hidden="true"></canvas>
+      <canvas class="genre-icon" data-char-icon="2" width="44" height="44" aria-hidden="true"></canvas>
+      <h3>不灭</h3>
+      <p class="genre-name-en">Shadow Undying</p>
+      <ul><li>吞噬死亡余烬，将恢复化为护壳</li></ul>
+      <div class="genre-badge">汲取流</div>
+    </div>
+    <div class="genre-card" id="card-genre-3" tabindex="0">
+      <div class="genre-card-glow g2"></div>
+      <canvas class="genre-silhouette" data-char-sil="3" aria-hidden="true"></canvas>
+      <canvas class="genre-icon" data-char-icon="3" width="44" height="44" aria-hidden="true"></canvas>
+      <h3>因果</h3>
+      <p class="genre-name-en">Causal Echo</p>
+      <ul><li>让一次攻击在未来再次发生</li></ul>
+      <div class="genre-badge">连锁流</div>
+    </div>
+    <div class="genre-card" id="card-genre-4" tabindex="0">
+      <div class="genre-card-glow g4"></div>
+      <canvas class="genre-silhouette" data-char-sil="4" aria-hidden="true"></canvas>
+      <canvas class="genre-icon" data-char-icon="4" width="44" height="44" aria-hidden="true"></canvas>
+      <h3>不息</h3>
+      <p class="genre-name-en">Shadow Ricochet</p>
+      <ul><li>演算星球之间的引力</li></ul>
+      <div class="genre-badge">弹射流</div>
+    </div>
+  </div>
+
+  <div class="section-title">4. 待机 / 移动 / 攻击连续动画</div>
+  <div class="hint">每个角色使用独立的动作状态机；循环播放待机 → 移动 → 攻击 → 恢复。无真实弹体、伤害或技能结算。</div>
+  <div class="demo-wrap" id="demo-row"></div>
+
+<script src="../js/utils.js"></script>
+<script src="../js/config.js"></script>
+<script src="../js/characters.js"></script>
+<script>
+(function(){
+  const NAMES = ['枪手 · 回到过去', '法师 · 黑洞', '战士 · 不灭', '司祭 · 因果', '驭球者 · 不息'];
+  const SUBS  = ['Shadow Echo / ID 0', 'Shadow Vortex / ID 1', 'Shadow Undying / ID 2', 'Causal Echo / ID 3', 'Shadow Ricochet / ID 4'];
+
+  // ── 1. 并排全身图 ────────────────────────────────────────────────
+  const sheet = document.getElementById('sheet');
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const SW = 1280, SH = 300;
+  sheet.style.width = SW + 'px';
+  sheet.style.height = SH + 'px';
+  sheet.width = SW * dpr;
+  sheet.height = SH * dpr;
+  const sctx = sheet.getContext('2d');
+  sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const sheetAnims = [];
+  for (let g = 0; g < 5; g++) {
+    const a = new CharacterAnim(g, 0.2);
+    a.time = 0.7 + g * 0.13;
+    sheetAnims.push(a);
+  }
+
+  function drawSheet(){
+    sctx.clearRect(0, 0, SW, SH);
+    // 地面参考线
+    sctx.save();
+    sctx.strokeStyle = 'rgba(140,90,220,.18)';
+    sctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const x = 128 + i * 250;
+      sctx.beginPath(); sctx.moveTo(x - 72, 248); sctx.lineTo(x + 72, 248); sctx.stroke();
+    }
+    sctx.restore();
+    for (let g = 0; g < 5; g++) {
+      const x = 128 + g * 250;
+      Characters.draw(sctx, g, sheetAnims[g], x, 248, { height: 170 });
+      sctx.save();
+      sctx.textAlign = 'center';
+      sctx.fillStyle = '#d9c9ff';
+      sctx.font = '600 13px "Noto Sans SC", sans-serif';
+      sctx.fillText(NAMES[g], x, 272);
+      sctx.fillStyle = '#7c6e9c';
+      sctx.font = '11px "Noto Sans SC", sans-serif';
+      sctx.fillText(SUBS[g], x, 289);
+      sctx.restore();
+    }
+  }
+
+  // ── 2. 图标 ──────────────────────────────────────────────────────
+  const iconRow = document.getElementById('icon-row');
+  const iconCells = [];
+  for (let g = 0; g < 5; g++) {
+    const cell = document.createElement('div');
+    cell.className = 'icon-cell';
+    const small = document.createElement('canvas');
+    small.width = 44 * dpr; small.height = 44 * dpr;
+    small.style.width = '44px'; small.style.height = '44px';
+    const zoom = document.createElement('canvas');
+    zoom.className = 'zoom';
+    zoom.width = 132 * dpr; zoom.height = 132 * dpr;
+    zoom.style.width = '132px'; zoom.style.height = '132px';
+    const label = document.createElement('span');
+    label.textContent = NAMES[g].split(' · ')[0] + ' 44px / 3×';
+    cell.appendChild(small); cell.appendChild(zoom); cell.appendChild(label);
+    iconRow.appendChild(cell);
+    iconCells.push({ small, zoom, anim: new CharacterAnim(g, -Math.PI / 2) });
+  }
+  function drawIcons(){
+    for (const c of iconCells) {
+      const g = iconCells.indexOf(c);
+      for (const cv of [c.small, c.zoom]) {
+        const ctx = cv.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const w = cv.width / dpr, h = cv.height / dpr;
+        ctx.clearRect(0, 0, w, h);
+        const size = Math.min(w, h) * 0.98;
+        // 放大版加一圈展示底板，方便检查轮廓与透明边缘
+        if (cv === c.zoom) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(140,90,220,.28)';
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(1, 1, w - 2, h - 2);
+          ctx.restore();
+        }
+        Characters.drawHead(ctx, g, w / 2, h * 0.55, size, { anim: c.anim });
+      }
+    }
+  }
+
+  // ── 3. 卡片（复用游戏 CharacterUI）───────────────────────────────
+  if (typeof CharacterUI !== 'undefined') {
+    CharacterUI.init();
+    CharacterUI.show();
+  }
+
+  // ── 4. 连续动画 ──────────────────────────────────────────────────
+  const demoRow = document.getElementById('demo-row');
+  const demoItems = [];
+  for (let g = 0; g < 5; g++) {
+    const cell = document.createElement('div');
+    cell.className = 'demo-cell';
+    const cv = document.createElement('canvas');
+    cv.width = 210 * dpr; cv.height = 190 * dpr;
+    const st = document.createElement('div');
+    st.className = 'state';
+    const nm = document.createElement('div');
+    nm.className = 'name';
+    nm.textContent = NAMES[g];
+    cell.appendChild(cv); cell.appendChild(st); cell.appendChild(nm);
+    demoRow.appendChild(cell);
+    demoItems.push({
+      genre: g, cv, ctx: cv.getContext('2d'), stateEl: st,
+      anim: new CharacterAnim(g, 0.08),
+      state: 'idle', timer: 1.2 + g * 0.25,
+      phaseT: 0,
+    });
+  }
+  const LABELS = { idle: '待机', move: '移动', attack: '攻击', recover: '恢复' };
+
+  function startAttack(it) {
+    const g = it.genre;
+    if (g === 1) it.anim.triggerSkill('vortex', 0.5, 0.04);
+    else if (g === 2) it.anim.triggerSkill('pulse', 0.55, 0.04);
+    else if (g === 4) it.anim.triggerFire('chargedThunder', 0.04);
+    else it.anim.triggerFire('basic', 0.04);
+  }
+
+  function updateDemo(it, dt){
+    it.timer -= dt;
+    it.phaseT += dt;
+    if (it.state === 'idle' && it.timer <= 0) {
+      it.state = 'move'; it.timer = 1.35; it.phaseT = 0;
+    } else if (it.state === 'move' && it.timer <= 0) {
+      it.state = 'attack'; it.timer = 0.95; it.phaseT = 0;
+      startAttack(it);
+    } else if (it.state === 'attack' && it.timer <= 0) {
+      it.state = 'recover'; it.timer = 0.9; it.phaseT = 0;
+    } else if (it.state === 'recover' && it.timer <= 0) {
+      it.state = 'idle'; it.timer = 1.5; it.phaseT = 0;
+    }
+    const moving = it.state === 'move';
+    let aim = 0.08;
+    if (moving) aim = 0.08 + Math.sin(it.phaseT * 7) * 0.16;
+    it.anim.update(dt, { moving, aimAngle: aim, speedFactor: 9 });
+    it.stateEl.textContent = LABELS[it.state];
+  }
+
+  function drawDemo(it){
+    const ctx = it.ctx;
+    const w = it.cv.width / dpr, h = it.cv.height / dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(140,90,220,.16)';
+    ctx.beginPath(); ctx.moveTo(w * .2, h * .9); ctx.lineTo(w * .8, h * .9); ctx.stroke();
+    ctx.restore();
+    Characters.draw(ctx, it.genre, it.anim, w / 2, h * 0.9, { height: 138 });
+  }
+
+  // ── 主循环 ──────────────────────────────────────────────────────
+  drawSheet();
+  drawIcons();
+  let last = performance.now();
+  function loop(t) {
+    const dt = Math.min(0.05, (t - last) / 1000 || 0);
+    last = t;
+    // 静态页面的轻微待机呼吸
+    for (let g = 0; g < 5; g++) {
+      sheetAnims[g].update(dt, { moving: false, aimAngle: 0.2 });
+      iconCells[g].anim.update(dt, { moving: false, aimAngle: -Math.PI / 2 });
+    }
+    drawSheet();
+    drawIcons();
+    for (const it of demoItems) updateDemo(it, dt);
+    for (const it of demoItems) drawDemo(it);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
